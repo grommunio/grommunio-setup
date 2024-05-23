@@ -61,6 +61,10 @@ setconf()
 			fi
 		fi
 	else
+		saved_umask=$(umask)
+		umask 077
+		>"${FILE}"
+		umask "$saved_umask" >/dev/null
 		if [ ${SPACING} != 1 ]; then
 			echo "${PARAM} = ${VAL}" >"${FILE}"
 		else

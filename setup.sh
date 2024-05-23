@@ -607,6 +607,8 @@ done
 for CFG in midb.cfg zcore.cfg exmdb_local.cfg exmdb_provider.cfg exchange_emsmdb.cfg exchange_nsp.cfg ; do
   setconf "/etc/gromox/${CFG}" x500_org_name "${X500}"
 done
+chown grommunio:gromoxcf /etc/gromox/*.cfg
+chmod 0640 /etc/gromox/*.cfg
 
 writelog "Config stage: postfix configuration"
 progress 80
@@ -868,7 +870,9 @@ if [ "$FT_ARCHIVE" == "true" ] ; then
   echo "archive@${FQDN} smtp:[127.0.0.1]:2693" > /etc/postfix/transport
   postmap /etc/postfix/transport
 
-  mv /etc/grommunio-archive/grommunio-archive.conf.dist /etc/grommunio-archive/grommunio-archive.conf
+  cp -f /etc/grommunio-archive/grommunio-archive.conf.dist /etc/grommunio-archive/grommunio-archive.conf
+  chgrp groarchive /etc/grommunio-archive/grommunio-archive.conf
+  chmod g=r,o= /etc/grommunio-archive/grommunio-archive.conf
   setconf /etc/grommunio-archive/grommunio-archive.conf mysqluser "${ARCHIVE_MYSQL_USER}" 0
   setconf /etc/grommunio-archive/grommunio-archive.conf mysqlpwd "${ARCHIVE_MYSQL_PASS}" 0
   setconf /etc/grommunio-archive/grommunio-archive.conf mysqldb "${ARCHIVE_MYSQL_DB}" 0
