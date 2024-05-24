@@ -1,0 +1,286 @@
+#!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2021 grommunio GmbH
+
+dialog >/dev/null 2>&1
+if [ "$?" -eq 127 ]; then
+	echo ERROR: /usr/bin/dialog not installed
+	exit 1
+fi
+
+WELCOME_MSG="\
+Welcome to grommunio Setup.
+
+grommunio Setup helps setting up grommunio and get it up and running.
+During the installation, grommunio Setup will modify system settings.
+
+Make sure that, before running grommunio Setup, you have a working Internet
+connection. This is needed to access online software repositories
+and create TLS certificates using Let's Encrypt.
+
+You can always abort grommunio Setup by pressing the \"ESC\" key.
+
+For more information, refer to https://docs.grommunio.com/admin"
+
+dialog_welcome ()
+{
+	dialog --no-mouse --colors --cr-wrap --clear \
+		--backtitle "grommunio Setup" \
+		--title "Welcome" \
+		--yes-label "Continue" \
+		--no-label "Cancel" --defaultno \
+		--yesno "${WELCOME_MSG}" 0 0
+	dialog_exit $?
+}
+
+memory_notice ()
+{
+	dialog --no-mouse --colors --cr-wrap --clear --backtitle "grommunio Setup" \
+		--title "Memory requirements" \
+		--yes-label "Ignore" --no-label "Exit" --defaultno \
+		--yesno "Minus the regions reserved by firmware or the operating system kernel, this system appears to have only $1 megabytes of memory available. Running with less than 4000 MB is not advised and may lead to processes being unable to perform or startup altogether." 0 0
+	dialog_exit $?
+}
+
+ADMINPASS_MSG="\
+Enter the password for the main administration user for the grommunio admin-web UI.
+
+You can either use the randomly created one (shown at the end of the setup wizard), or enter a custom one now."
+
+dialog_adminpass()
+{
+	ADMIN_AUTO_PW=$(randpw)
+	dialog --no-mouse --colors --clear --insecure --cr-wrap \
+		--backtitle "grommunio Setup" \
+		--title "Administrator password" \
+		--ok-label "Submit" \
+		--passwordform         "${ADMINPASS_MSG}" 0 0 0 \
+		  "Password:     " 1 1 "${ADMIN_AUTO_PW}" 1 17 25 0 \
+		  "Confirmation: " 2 1 "${ADMIN_AUTO_PW}" 2 17 25 0 \
+		2>"${TMPF}"
+	dialog_exit $?
+	PASSONE=$(sed -n '1{p;q}' "${TMPF}")
+	PASSTWO=$(sed -n '2{p;q}' "${TMPF}")
+	if [ "${PASSONE}" != "${PASSTWO}" ] || [ -z "${PASSONE}" ] ; then
+		dialog --no-mouse --clear --colors \
+			--backtitle "grommunio Setup" \
+			--title "Administrator password" \
+			--msgbox 'The passwords were either empty or not identical. Re-enter and confirm the password accordingly.' 0 0
+		dialog_exit $?
+		dialog_adminpass
+	else
+		ADMIN_PASS=${PASSTWO}
+		writelog "grommunio admin password: ${ADMIN_PASS}"
+	fi
+}
+
+RELAYHOST_MSG="\
+Setting a relayhost is necessary if your grommunio server is not able to directly send emails over the internet.
+
+Make sure the relayhost allows relaying for this host. You can add DNS names or IP adresses.
+To ensure no MX DNS lookups are issued, enclose the relayhost in square brackets, like \"[mail.isp.com]\".
+"
+get_relayhost()
+{
+	writelog "Dialog: Postfix relayhost"
+	dialog --no-mouse --clear --colors --cr-wrap \
+		--backtitle "grommunio Setup" \
+		--title "Postfix relayhost" \
+		--inputbox "${RELAYHOST_MSG}" 0 0 "" 3>&1 1>&2 2>&3
+	dialog_exit $?
+}
+
+FEATURES_MSG="\
+Choose the features grommunio-setup should install and configure.
+"
+
+get_features()
+{
+	dialog --no-mouse --clear --colors --cr-wrap \
+		--backtitle "grommunio Setup" \
+		--title "Choose features to install" \
+		--ok-label "Submit" \
+		--checklist "${FEATURES_MSG}" 0 0 0 \
+			"core"    "mandatory" on  \
+			"chat"    "optional"  off \
+			"meet"    "optional"  off \
+			"files"   "optional"  off \
+			"office"  "optional"  off \
+			"archive" "optional"  off 2>"${TMPF}"
+	dialog_exit $?
+	for i in $(cat ${TMPF}) ; do
+		if ! [ "$i" == "core" ] && ! [ "$1" == "meet" ] ; then
+			eval FT_${i^^}=true
+			FT_PACKAGES="$FT_PACKAGES grommunio-${i}"
+		fi
+		if [ "$i" == "office" ] ; then
+			FT_PACKAGES="$FT_PACKAGES rabbitmq-server"
+		fi
+		if [ "$i" == "archive" ] ; then
+			FT_PACKAGES="$FT_PACKAGES sphinx"
+		fi
+		if [ "$i" == "meet" ] ; then
+			FT_PACKAGES="$FT_PACKAGES jitsi-jibri jitsi-jicofo jitsi-jigasi jitsi-videobridge jitsi-meet jitsi-meet-prosody-plugins jitsi-meet-branding-grommunio prosody"
+		fi
+	done
+}
+
+set_chat_mysql_param()
+{
+	writelog "Dialog: mysql configuration"
+	dialog --no-mouse --colors \
+		--backtitle "grommunio Setup" \
+		--title "MariaDB/MySQL chat database credentials - WARNING: Database is cleared!" \
+		--ok-label "Submit" \
+		--form "Enter the database credentials." 0 0 0 \
+			"Host:    " 1 1 "${CHAT_MYSQL_HOST}" 1 17 25 0 \
+			"User:    " 2 1 "${CHAT_MYSQL_USER}" 2 17 25 0 \
+			"Password:" 3 1 "${CHAT_MYSQL_PASS}" 3 17 25 0 \
+			"Database:" 4 1 "${CHAT_MYSQL_DB}"   4 17 25 0 2>"${TMPF}"
+	dialog_exit $?
+
+	CHAT_MYSQL_HOST=$(sed -n '1{p;q}' "${TMPF}")
+	CHAT_MYSQL_USER=$(sed -n '2{p;q}' "${TMPF}")
+	CHAT_MYSQL_PASS=$(sed -n '3{p;q}' "${TMPF}")
+	CHAT_MYSQL_DB=$(sed -n '4{p;q}' "${TMPF}")
+
+	if [ -z "${CHAT_MYSQL_HOST}" ] || [ -z "${CHAT_MYSQL_USER}" ] || [ -z "${CHAT_MYSQL_PASS}" ] || [ -z "${CHAT_MYSQL_DB}" ]; then
+		set_chat_mysql_param
+	fi
+}
+
+set_files_mysql_param()
+{
+	writelog "Dialog: mysql configuration"
+	dialog --no-mouse --colors \
+		--backtitle "grommunio Setup" \
+		--title "MariaDB/MySQL files database credentials - WARNING: Database is cleared!" \
+		--ok-label "Submit" \
+		--form "Enter the database credentials." 0 0 0 \
+			   "Host:    " 1 1 "${FILES_MYSQL_HOST}" 1 17 25 0 \
+			   "User:    " 2 1 "${FILES_MYSQL_USER}" 2 17 25 0 \
+			   "Password:" 3 1 "${FILES_MYSQL_PASS}" 3 17 25 0 \
+			   "Database:" 4 1 "${FILES_MYSQL_DB}"   4 17 25 0 2>"${TMPF}"
+	dialog_exit $?
+
+	FILES_MYSQL_HOST=$(sed -n '1{p;q}' "${TMPF}")
+	FILES_MYSQL_USER=$(sed -n '2{p;q}' "${TMPF}")
+	FILES_MYSQL_PASS=$(sed -n '3{p;q}' "${TMPF}")
+	FILES_MYSQL_DB=$(sed -n '4{p;q}' "${TMPF}")
+
+	if [ -z "${FILES_MYSQL_HOST}" ] || [ -z "${FILES_MYSQL_USER}" ] || [ -z "${FILES_MYSQL_PASS}" ] || [ -z "${FILES_MYSQL_DB}" ]; then
+		set_files_mysql_param
+	fi
+}
+
+set_archive_mysql_param()
+{
+	writelog "Dialog: mysql configuration"
+	dialog --no-mouse --colors \
+		--backtitle "grommunio Setup" \
+		--title "MariaDB/MySQL archive database credentials - WARNING: Database is cleared!" \
+		--ok-label "Submit" \
+		--form "Enter the database credentials." 0 0 0 \
+			   "Host:    " 1 1 "${ARCHIVE_MYSQL_HOST}" 1 17 25 0 \
+			   "User:    " 2 1 "${ARCHIVE_MYSQL_USER}" 2 17 25 0 \
+			   "Password:" 3 1 "${ARCHIVE_MYSQL_PASS}" 3 17 25 0 \
+			   "Database:" 4 1 "${ARCHIVE_MYSQL_DB}"   4 17 25 0 2>"${TMPF}"
+	dialog_exit $?
+
+	ARCHIVE_MYSQL_HOST=$(sed -n '1{p;q}' "${TMPF}")
+	ARCHIVE_MYSQL_USER=$(sed -n '2{p;q}' "${TMPF}")
+	ARCHIVE_MYSQL_PASS=$(sed -n '3{p;q}' "${TMPF}")
+	ARCHIVE_MYSQL_DB=$(sed -n '4{p;q}' "${TMPF}")
+
+	if [ -z "${ARCHIVE_MYSQL_HOST}" ] || [ -z "${ARCHIVE_MYSQL_USER}" ] || [ -z "${ARCHIVE_MYSQL_PASS}" ] || [ -z "${ARCHIVE_MYSQL_DB}" ]; then
+		set_archive_mysql_param
+	fi
+}
+
+set_office_mysql_param()
+{
+	writelog "Dialog: mysql configuration"
+	dialog --no-mouse --colors \
+		--backtitle "grommunio Setup" \
+		--title "MariaDB/MySQL office database credentials - WARNING: Database is cleared!" \
+		--ok-label "Submit" \
+		--form "Enter the database credentials." 0 0 0 \
+			   "Host:    " 1 1 "${OFFICE_MYSQL_HOST}" 1 17 25 0 \
+			   "User:    " 2 1 "${OFFICE_MYSQL_USER}" 2 17 25 0 \
+			   "Password:" 3 1 "${OFFICE_MYSQL_PASS}" 3 17 25 0 \
+			   "Database:" 4 1 "${OFFICE_MYSQL_DB}"   4 17 25 0 2>"${TMPF}"
+	dialog_exit $?
+
+	OFFICE_MYSQL_HOST=$(sed -n '1{p;q}' "${TMPF}")
+	OFFICE_MYSQL_USER=$(sed -n '2{p;q}' "${TMPF}")
+	OFFICE_MYSQL_PASS=$(sed -n '3{p;q}' "${TMPF}")
+	OFFICE_MYSQL_DB=$(sed -n '4{p;q}' "${TMPF}")
+
+	if [ -z "${OFFICE_MYSQL_HOST}" ] || [ -z "${OFFICE_MYSQL_USER}" ] || [ -z "${OFFICE_MYSQL_PASS}" ] || [ -z "${OFFICE_MYSQL_DB}" ]; then
+		set_office_mysql_param
+	fi
+}
+
+CHAT_ADMINPASS_MSG="\
+Enter your password for the main administration user for grommunio chat.
+
+You can either use the randomly created one (shown at the end of the setup wizard), or enter your own password."
+
+dialog_chat_adminpass()
+{
+	CHAT_ADMIN_AUTO_PW=$(randpw)
+	dialog --no-mouse --colors --clear --insecure --cr-wrap \
+		--backtitle "grommunio Setup" \
+		--title "Administrator password for grommunio chat" \
+		--ok-label "Submit" \
+		--passwordform         "${CHAT_ADMINPASS_MSG}" 0 0 0 \
+		  "Password:     " 1 1 "${CHAT_ADMIN_AUTO_PW}" 1 17 25 0 \
+		  "Confirmation: " 2 1 "${CHAT_ADMIN_AUTO_PW}" 2 17 25 0 \
+		2>"${TMPF}"
+	dialog_exit $?
+	PASSONE=$(sed -n '1{p;q}' "${TMPF}")
+	PASSTWO=$(sed -n '2{p;q}' "${TMPF}")
+	if [ "${PASSONE}" != "${PASSTWO}" ] || [ -z "${PASSONE}" ] ; then
+		dialog --no-mouse --clear --colors \
+			--backtitle "grommunio Setup" \
+			--title "Administrator password for grommunio chat" \
+			--msgbox 'The passwords were either empty or not identical. Re-enter and confirm the password accordingly.' 0 0
+		dialog_exit $?
+		dialog_chat_adminpass
+	else
+		CHAT_ADMIN_PASS=${PASSTWO}
+		writelog "grommunio chat admin password: ${CHAT_ADMIN_PASS}"
+	fi
+}
+
+FILES_ADMINPASS_MSG="\
+Enter your password for the main administration user for grommunio files.
+
+You can either use the randomly created one (shown at the end of the setup wizard), or enter your own password."
+
+dialog_files_adminpass()
+{
+	FILES_ADMIN_AUTO_PW=$(randpw)
+	dialog --no-mouse --colors --clear --insecure --cr-wrap \
+		--backtitle "grommunio Setup" \
+		--title "Administrator password for grommunio files" \
+		--ok-label "Submit" \
+		--passwordform         "${FILES_ADMINPASS_MSG}" 0 0 0 \
+		  "Password:     " 1 1 "${FILES_ADMIN_AUTO_PW}" 1 17 25 0 \
+		  "Confirmation: " 2 1 "${FILES_ADMIN_AUTO_PW}" 2 17 25 0 \
+		2>"${TMPF}"
+	dialog_exit $?
+	PASSONE=$(sed -n '1{p;q}' "${TMPF}")
+	PASSTWO=$(sed -n '2{p;q}' "${TMPF}")
+	if [ "${PASSONE}" != "${PASSTWO}" ] || [ -z "${PASSONE}" ] ; then
+		dialog --no-mouse --clear --colors \
+			--backtitle "grommunio Setup" \
+			--title "Administrator password for grommunio files" \
+			--msgbox 'The passwords were either empty or not identical. Re-enter and confirm the password accordingly.' 0 0
+		dialog_exit $?
+		dialog_files_adminpass
+	else
+		FILES_ADMIN_PASS=${PASSTWO}
+		writelog "grommunio files admin password: ${FILES_ADMIN_PASS}"
+	fi
+}

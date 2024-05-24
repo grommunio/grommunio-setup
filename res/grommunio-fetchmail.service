@@ -1,0 +1,8 @@
+[Unit]
+Description=fetchmail configuration generation
+ConditionPathExists=/usr/bin/fetchmail
+ConditionPathExists=/usr/sbin/grommunio-admin
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/grommunio-admin fetchmail write-rc

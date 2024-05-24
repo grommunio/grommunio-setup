@@ -1,0 +1,38 @@
+#!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2021 grommunio GmbH
+
+if [ -e "/sbin/supportconfig" ] ; then
+	echo "INFO - Please wait while grommunio-support generates your support package"
+	while :; do
+		printf "."
+		sleep 1
+	done &
+	bgid=$!
+	rm -rf /var/log/grommunio-support/* > /dev/null 2>&1
+	supportconfig -B "grommunio-support" -E "support@grommunio.com" -N "grommunio Support" -O "grommunio GmbH" -R /var/log/grommunio-support -L -Q -i CRASH,DISK,ETC,HA,LVM,MEM,NET,PROC,SMART,SRAID,SYSCONFIG,SYSFS,SYSFS,WEB
+	if [ -e "/var/log/grommunio-support/scc_grommunio-support.txz" ] ; then
+		kill "$bgid" > /dev/null 2>&1
+		tar rf /var/log/grommunio-support/scc_grommunio-support.txz /var/log/grommunio-setup.log > /dev/null 2>&1
+		mv /var/log/grommunio-support/scc_grommunio-support.txz /usr/share/grommunio-admin-web/grommunio-support.txz > /dev/null 2>&1
+		chmod 444 /usr/share/grommunio-admin-web/grommunio-support.txz > /dev/null 2>&1
+		echo ""
+		echo "SUCCESS - The support package was generated successfully and is available"
+		echo "          for download at <ADMIN-URL>/grommunio-support.txz"
+		echo "          Download the package and send it to support@grommunio.com ."
+		echo ""
+		echo "Note: This package might contain sensitive information. If this is"
+		echo "      a concern, prune private data from the archive before"
+		echo "      sending it to grommunio support."
+		echo ""
+		echo "Support data is used only for diagnostic purposes and is considered confidential information."
+	else
+		kill "$bgid" > /dev/null 2>&1
+		echo ""
+		echo "ERROR - Something went wrong while generating your support package"
+		echo "        Contact grommunio support <support@grommunio.com> to resolve this issue."
+	fi
+else
+	echo "ERROR - This system is missing a required dependency to generate support packages"
+	echo "        Install the dependency by running `zypper in supportutils`"
+fi

@@ -1,0 +1,9 @@
+#!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2021 grommunio GmbH
+
+openssl x509 -in "$RENEWED_LINEAGE/chain.pem" -out "$RENEWED_LINEAGE/chain-first.pem"
+cat "$RENEWED_LINEAGE/cert.pem" "$RENEWED_LINEAGE/chain-first.pem" > "/etc/grommunio-common/ssl/server-bundle.pem"
+cp "$RENEWED_LINEAGE/privkey.pem" "/etc/grommunio-common/ssl/server.key"
+find /etc/grommunio-common/ssl/ -type f -exec chown -h gromox:gromox {} +
+systemctl restart postfix gromox-http gromox-imap gromox-pop3 gromox-delivery-queue

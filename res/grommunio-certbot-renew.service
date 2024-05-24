@@ -1,0 +1,7 @@
+[Unit]
+Description=Certbot/Letsencrypt certificate renewal
+ConditionPathExists=/usr/bin/certbot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/certbot renew --pre-hook "service nginx stop" --deploy-hook /usr/share/grommunio-setup/grommunio-certbot-renew-hook --post-hook "service nginx start"
