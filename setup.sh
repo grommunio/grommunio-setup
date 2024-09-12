@@ -554,6 +554,9 @@ setconf /etc/gromox/mysql_adaptor.cfg mysql_dbname "${MYSQL_DB}"
 if [ "$MYSQL_INSTALL_TYPE" = 1 ]; then
 setconf /etc/gromox/mysql_adaptor.cfg schema_upgrade "host:${FQDN}"
 fi
+if [ "${MYSQL_INSTALL_TYPE}" = "2" ]; then
+setconf /etc/gromox/mysql_adaptor.cfg mysql_host "${MYSQL_HOST}"
+fi
 
 writelog "Config stage: autodiscover configuration"
 progress 50
