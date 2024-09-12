@@ -55,8 +55,8 @@ dialog_adminpass()
 		--title "Administrator password" \
 		--ok-label "Submit" \
 		--passwordform         "${ADMINPASS_MSG}" 0 0 0 \
-		  "Password:     " 1 1 "${ADMIN_AUTO_PW}" 1 17 25 0 \
-		  "Confirmation: " 2 1 "${ADMIN_AUTO_PW}" 2 17 25 0 \
+		  "Password:     " 1 1 "${ADMIN_AUTO_PW}" 1 17 33 0 \
+		  "Confirmation: " 2 1 "${ADMIN_AUTO_PW}" 2 17 33 0 \
 		2>"${TMPF}"
 	dialog_exit $?
 	PASSONE=$(sed -n '1{p;q}' "${TMPF}")
@@ -133,10 +133,10 @@ set_chat_mysql_param()
 		--title "MariaDB/MySQL chat database credentials - WARNING: Database is cleared!" \
 		--ok-label "Submit" \
 		--form "Enter the database credentials." 0 0 0 \
-			"Host:    " 1 1 "${CHAT_MYSQL_HOST}" 1 17 25 0 \
-			"User:    " 2 1 "${CHAT_MYSQL_USER}" 2 17 25 0 \
-			"Password:" 3 1 "${CHAT_MYSQL_PASS}" 3 17 25 0 \
-			"Database:" 4 1 "${CHAT_MYSQL_DB}"   4 17 25 0 2>"${TMPF}"
+			"Host:    " 1 1 "${CHAT_MYSQL_HOST}" 1 17 33 0 \
+			"User:    " 2 1 "${CHAT_MYSQL_USER}" 2 17 33 0 \
+			"Password:" 3 1 "${CHAT_MYSQL_PASS}" 3 17 33 0 \
+			"Database:" 4 1 "${CHAT_MYSQL_DB}"   4 17 33 0 2>"${TMPF}"
 	dialog_exit $?
 
 	CHAT_MYSQL_HOST=$(sed -n '1{p;q}' "${TMPF}")
@@ -157,10 +157,10 @@ set_files_mysql_param()
 		--title "MariaDB/MySQL files database credentials - WARNING: Database is cleared!" \
 		--ok-label "Submit" \
 		--form "Enter the database credentials." 0 0 0 \
-			   "Host:    " 1 1 "${FILES_MYSQL_HOST}" 1 17 25 0 \
-			   "User:    " 2 1 "${FILES_MYSQL_USER}" 2 17 25 0 \
-			   "Password:" 3 1 "${FILES_MYSQL_PASS}" 3 17 25 0 \
-			   "Database:" 4 1 "${FILES_MYSQL_DB}"   4 17 25 0 2>"${TMPF}"
+			   "Host:    " 1 1 "${FILES_MYSQL_HOST}" 1 17 33 0 \
+			   "User:    " 2 1 "${FILES_MYSQL_USER}" 2 17 33 0 \
+			   "Password:" 3 1 "${FILES_MYSQL_PASS}" 3 17 33 0 \
+			   "Database:" 4 1 "${FILES_MYSQL_DB}"   4 17 33 0 2>"${TMPF}"
 	dialog_exit $?
 
 	FILES_MYSQL_HOST=$(sed -n '1{p;q}' "${TMPF}")
@@ -181,10 +181,10 @@ set_archive_mysql_param()
 		--title "MariaDB/MySQL archive database credentials - WARNING: Database is cleared!" \
 		--ok-label "Submit" \
 		--form "Enter the database credentials." 0 0 0 \
-			   "Host:    " 1 1 "${ARCHIVE_MYSQL_HOST}" 1 17 25 0 \
-			   "User:    " 2 1 "${ARCHIVE_MYSQL_USER}" 2 17 25 0 \
-			   "Password:" 3 1 "${ARCHIVE_MYSQL_PASS}" 3 17 25 0 \
-			   "Database:" 4 1 "${ARCHIVE_MYSQL_DB}"   4 17 25 0 2>"${TMPF}"
+			   "Host:    " 1 1 "${ARCHIVE_MYSQL_HOST}" 1 17 33 0 \
+			   "User:    " 2 1 "${ARCHIVE_MYSQL_USER}" 2 17 33 0 \
+			   "Password:" 3 1 "${ARCHIVE_MYSQL_PASS}" 3 17 33 0 \
+			   "Database:" 4 1 "${ARCHIVE_MYSQL_DB}"   4 17 33 0 2>"${TMPF}"
 	dialog_exit $?
 
 	ARCHIVE_MYSQL_HOST=$(sed -n '1{p;q}' "${TMPF}")
@@ -205,10 +205,10 @@ set_office_mysql_param()
 		--title "MariaDB/MySQL office database credentials - WARNING: Database is cleared!" \
 		--ok-label "Submit" \
 		--form "Enter the database credentials." 0 0 0 \
-			   "Host:    " 1 1 "${OFFICE_MYSQL_HOST}" 1 17 25 0 \
-			   "User:    " 2 1 "${OFFICE_MYSQL_USER}" 2 17 25 0 \
-			   "Password:" 3 1 "${OFFICE_MYSQL_PASS}" 3 17 25 0 \
-			   "Database:" 4 1 "${OFFICE_MYSQL_DB}"   4 17 25 0 2>"${TMPF}"
+			   "Host:    " 1 1 "${OFFICE_MYSQL_HOST}" 1 17 33 0 \
+			   "User:    " 2 1 "${OFFICE_MYSQL_USER}" 2 17 33 0 \
+			   "Password:" 3 1 "${OFFICE_MYSQL_PASS}" 3 17 33 0 \
+			   "Database:" 4 1 "${OFFICE_MYSQL_DB}"   4 17 33 0 2>"${TMPF}"
 	dialog_exit $?
 
 	OFFICE_MYSQL_HOST=$(sed -n '1{p;q}' "${TMPF}")
@@ -234,8 +234,8 @@ dialog_chat_adminpass()
 		--title "Administrator password for grommunio chat" \
 		--ok-label "Submit" \
 		--passwordform         "${CHAT_ADMINPASS_MSG}" 0 0 0 \
-		  "Password:     " 1 1 "${CHAT_ADMIN_AUTO_PW}" 1 17 25 0 \
-		  "Confirmation: " 2 1 "${CHAT_ADMIN_AUTO_PW}" 2 17 25 0 \
+		  "Password:     " 1 1 "${CHAT_ADMIN_AUTO_PW}" 1 17 33 0 \
+		  "Confirmation: " 2 1 "${CHAT_ADMIN_AUTO_PW}" 2 17 33 0 \
 		2>"${TMPF}"
 	dialog_exit $?
 	PASSONE=$(sed -n '1{p;q}' "${TMPF}")
@@ -266,8 +266,8 @@ dialog_files_adminpass()
 		--title "Administrator password for grommunio files" \
 		--ok-label "Submit" \
 		--passwordform         "${FILES_ADMINPASS_MSG}" 0 0 0 \
-		  "Password:     " 1 1 "${FILES_ADMIN_AUTO_PW}" 1 17 25 0 \
-		  "Confirmation: " 2 1 "${FILES_ADMIN_AUTO_PW}" 2 17 25 0 \
+		  "Password:     " 1 1 "${FILES_ADMIN_AUTO_PW}" 1 17 33 0 \
+		  "Confirmation: " 2 1 "${FILES_ADMIN_AUTO_PW}" 2 17 33 0 \
 		2>"${TMPF}"
 	dialog_exit $?
 	PASSONE=$(sed -n '1{p;q}' "${TMPF}")
