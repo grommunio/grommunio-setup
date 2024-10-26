@@ -81,6 +81,8 @@ unset ARCHIVE_MYSQL_DB
 unset ARCHIVE_MYSQL_HOST
 unset ARCHIVE_MYSQL_USER
 unset ARCHIVE_MYSQL_PASS
+unset ARCHIVE_ADMIN_PASS
+unset ARCHIVE_AUDIT_PASS
 unset OFFICE_MYSQL_DB
 unset OFFICE_MYSQL_HOST
 unset OFFICE_MYSQL_USER
@@ -861,8 +863,11 @@ if [ "$FT_ARCHIVE" == "true" ] ; then
     echo "drop database if exists ${ARCHIVE_MYSQL_DB}; \
           create database ${ARCHIVE_MYSQL_DB};" | mysql -h"${ARCHIVE_MYSQL_HOST}" -u"${ARCHIVE_MYSQL_USER}" -p"${ARCHIVE_MYSQL_PASS}" "${ARCHIVE_MYSQL_DB}" >/dev/null 2>&1
   fi
+  
+  dialog_archive_adminpass
+  dialog_archive_auditpass
 
-  mysql -h"${ARCHIVE_MYSQL_HOST}" -u"${ARCHIVE_MYSQL_USER}" -p"${ARCHIVE_MYSQL_PASS}" "${ARCHIVE_MYSQL_DB}" < /usr/share/grommunio-archive/db-mysql.sql
+  sed -e "s#grommunioArchiveAdmin#${ARCHIVE_ADMIN_PASS}#g" -e "s#grommunioArchiveAuditor#${ARCHIVE_AUDIT_PASS}#g" /usr/share/grommunio-archive/db-mysql.sql | mysql -h"${ARCHIVE_MYSQL_HOST}" -u"${ARCHIVE_MYSQL_USER}" -p"${ARCHIVE_MYSQL_PASS}" "${ARCHIVE_MYSQL_DB}"
 
   sed -e "s#MYHOSTNAME#${FQDN}#g" -e "s#MYSMTP#${DOMAIN}#g" -e "s/MYSQL_HOSTNAME/${ARCHIVE_MYSQL_HOST}/" -e "s/MYSQL_DATABASE/${ARCHIVE_MYSQL_DB}/" -e "s/MYSQL_PASSWORD/${ARCHIVE_MYSQL_PASS}/" -e "s/MYSQL_USERNAME/${ARCHIVE_MYSQL_USER}/" /etc/grommunio-archive/config-site.dist.php > /etc/grommunio-archive/config-site.php
 
@@ -898,6 +903,11 @@ if [ "$FT_ARCHIVE" == "true" ] ; then
 
   jq '.archiveWebAddress |= "https://'${FQDN}'/archive"' /tmp/config.json > /tmp/config-new.json
   mv /tmp/config-new.json /tmp/config.json
+
+  writelog "groarchive admin user: admin@local"
+  writelog "groarchive admin pass: ${ARCHIVE_ADMIN_PASS}"
+  writelog "groarchive audit user: auditor@local"
+  writelog "groarchive audit pass: ${ARCHIVE_AUDIT_PASS}"			
 fi
 
 mv /tmp/config.json /etc/grommunio-admin-common/config.json
