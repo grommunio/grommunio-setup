@@ -885,6 +885,7 @@ if [ "$FT_ARCHIVE" == "true" ] ; then
   setconf /etc/grommunio-archive/grommunio-archive.conf mysqlpwd "${ARCHIVE_MYSQL_PASS}" 0
   setconf /etc/grommunio-archive/grommunio-archive.conf mysqldb "${ARCHIVE_MYSQL_DB}" 0
   setconf /etc/grommunio-archive/grommunio-archive.conf listen_addr 0.0.0.0 0
+  setconf /etc/grommunio-archive/grommunio-archive.conf storedir /var/lib/grommunio-archive/store
 
   php /etc/grommunio-archive/sphinx.conf.dist > /etc/sphinx/sphinx.conf
 
