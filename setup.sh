@@ -863,7 +863,7 @@ if [ "$FT_ARCHIVE" == "true" ] ; then
     echo "drop database if exists ${ARCHIVE_MYSQL_DB}; \
           create database ${ARCHIVE_MYSQL_DB};" | mysql -h"${ARCHIVE_MYSQL_HOST}" -u"${ARCHIVE_MYSQL_USER}" -p"${ARCHIVE_MYSQL_PASS}" "${ARCHIVE_MYSQL_DB}" >/dev/null 2>&1
   fi
-  
+
   dialog_archive_adminpass
   dialog_archive_auditpass
 
@@ -908,7 +908,7 @@ if [ "$FT_ARCHIVE" == "true" ] ; then
   writelog "groarchive admin user: admin@local"
   writelog "groarchive admin pass: ${ARCHIVE_ADMIN_PASS}"
   writelog "groarchive audit user: auditor@local"
-  writelog "groarchive audit pass: ${ARCHIVE_AUDIT_PASS}"			
+  writelog "groarchive audit pass: ${ARCHIVE_AUDIT_PASS}"
 fi
 
 mv /tmp/config.json /etc/grommunio-admin-common/config.json

@@ -13,7 +13,7 @@ fi
 MUC_NICK=$(uuidgen)
 
 systemctl is-active --quiet prosody && systemctl stop prosody
-systemctl is-active --quiet jitsi-videobridge && systemctl stop jitsi-videobridge 
+systemctl is-active --quiet jitsi-videobridge && systemctl stop jitsi-videobridge
 systemctl is-active --quiet jitsi-jicofo && systemctl stop jitsi-jicofo
 
 zypper install -y jitsi-jicofo jitsi-meet jitsi-meet-branding-grommunio jitsi-videobridge prosody >>"${LOGFILE}" 2>&1
