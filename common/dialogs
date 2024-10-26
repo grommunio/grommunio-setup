@@ -284,3 +284,67 @@ dialog_files_adminpass()
 		writelog "grommunio files admin password: ${FILES_ADMIN_PASS}"
 	fi
 }
+
+ARCHIVE_ADMINPASS_MSG="\
+Enter your password for the main administration user for grommunio-archive.
+You can either use the randomly created one (shown at the end of the setup wizard), or enter your own password."
+
+dialog_archive_adminpass() {
+
+  ARCHIVE_ADMIN_AUTO_PW=$(randpw)
+  dialog --no-mouse --colors --clear --insecure --cr-wrap \
+    --backtitle "grommunio Setup" \
+    --title "Administrator password for grommunio-archive" \
+    --ok-label "Submit" \
+    --passwordform         "${ARCHIVE_ADMINPASS_MSG}" 0 0 0 \
+      "Password:     " 1 1 "${ARCHIVE_ADMIN_AUTO_PW}" 1 17 25 0 \
+      "Confirmation: " 2 1 "${ARCHIVE_ADMIN_AUTO_PW}" 2 17 25 0 \
+    2>"${TMPF}"
+  dialog_exit $?
+  PASSONE=$(sed -n '1{p;q}' "${TMPF}")
+  PASSTWO=$(sed -n '2{p;q}' "${TMPF}")
+  if [ "${PASSONE}" != "${PASSTWO}" ] || [ -z "${PASSONE}" ] ; then
+    dialog --no-mouse --clear --colors \
+      --backtitle "grommunio Setup" \
+      --title "Administrator password for grommunio-archive" \
+      --msgbox 'The passwords were either empty or not identical. Re-enter and confirm the password accordingly.' 0 0
+    dialog_exit $?
+    dialog_archive_adminpass
+  else
+    ARCHIVE_ADMIN_PASS=${PASSTWO}
+    writelog "grommunio-archive admin@local password: ${ARCHIVE_ADMIN_PASS}"
+  fi
+
+}
+
+ARCHIVE_AUDITPASS_MSG="\
+Enter your password for the auditor role user for grommunio-archive.
+You can either use the randomly created one (shown at the end of the setup wizard), or enter your own password."
+
+dialog_archive_auditpass() {
+
+  ARCHIVE_AUDIT_AUTO_PW=$(randpw)
+  dialog --no-mouse --colors --clear --insecure --cr-wrap \
+    --backtitle "grommunio Setup" \
+    --title "Auditor role password for grommunio-archive" \
+    --ok-label "Submit" \
+    --passwordform         "${ARCHIVE_AUDITPASS_MSG}" 0 0 0 \
+      "Password:     " 1 1 "${ARCHIVE_AUDIT_AUTO_PW}" 1 17 25 0 \
+      "Confirmation: " 2 1 "${ARCHIVE_AUDIT_AUTO_PW}" 2 17 25 0 \
+    2>"${TMPF}"
+  dialog_exit $?
+  PASSONE=$(sed -n '1{p;q}' "${TMPF}")
+  PASSTWO=$(sed -n '2{p;q}' "${TMPF}")
+  if [ "${PASSONE}" != "${PASSTWO}" ] || [ -z "${PASSONE}" ] ; then
+    dialog --no-mouse --clear --colors \
+      --backtitle "grommunio Setup" \
+      --title "Auditor role password for grommunio-archive" \
+      --msgbox 'The passwords were either empty or not identical. Re-enter and confirm the password accordingly.' 0 0
+    dialog_exit $?
+    dialog_archive_auditpass
+  else
+    ARCHIVE_AUDIT_PASS=${PASSTWO}
+    writelog "grommunio-archive audit@local password: ${ARCHIVE_AUDIT_PASS}"
+  fi
+
+}
