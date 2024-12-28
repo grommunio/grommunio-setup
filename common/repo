@@ -25,7 +25,7 @@ setup_repo() {
 [grommunio]
 enabled=1
 autorefresh=1
-baseurl=https://${REPO_USER}:${REPO_PASS}@download.grommunio.com/${REPO_PATH}/openSUSE_Leap_$(distlevel)/?ssl_verify=no
+baseurl=https://${REPO_USER}:${REPO_PASS}@download.grommunio.com/${REPO_PATH}/openSUSE_Leap_$(distlevel)
 type=rpm-md
 EOF
 	else
@@ -35,7 +35,7 @@ EOF
 [grommunio]
 enabled=1
 autorefresh=1
-baseurl=https://download.grommunio.com/${REPO_PATH}/openSUSE_Leap_$(distlevel)/?ssl_verify=no
+baseurl=https://download.grommunio.com/${REPO_PATH}/openSUSE_Leap_$(distlevel)
 type=rpm-md
 EOF
 	fi
