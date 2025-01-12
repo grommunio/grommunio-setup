@@ -120,5 +120,20 @@ failonme()
 
 distlevel()
 {
-	echo "15.5"
+	(
+	if [ -f /etc/os-release ]; then
+		. /etc/os-release
+	else
+		echo "The file /etc/os-release was not found. The distribution cannot be identified."
+		exit 1
+	fi
+	case $ID in
+		opensuse*|sles)
+			echo "$VERSION_ID"
+			;;
+		grommunio-lds|*)
+			echo "15.6"
+			;;
+	esac
+	)
 }
