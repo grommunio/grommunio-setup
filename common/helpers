@@ -132,7 +132,7 @@ distlevel()
 			echo "$VERSION_ID"
 			;;
 		grommunio-lds|*)
-			hostnamectl |awk '/Operating System:/{print $NF}'
+			echo "15.6"
 			;;
 	esac
 	)
