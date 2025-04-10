@@ -237,6 +237,7 @@ var config = {
     p2p: {
         enabled: true,
         stunServers: [
+            { urls: 'stun:turn.grommunio.com:443' }
         ]
     },
     analytics: {
@@ -269,204 +270,49 @@ org.jitsi.jicofo.ALWAYS_TRUST_MODE_ENABLED=true
 EOJICOFOSIP
 
 cat > /etc/jitsi/videobridge/application.conf <<EOVBAPPCONF
+stats {
+  # Enable broadcasting stats/presence in a MUC
+  enabled = true
+  transports = [
+    { type = "muc" }
+  ]
+}
+
+apis {
+  xmpp-client {
+    configs {
+      # Connect to the first XMPP server
+      xmpp-server-1 {
+        hostname="${FQDN}"
+        domain = "auth.${FQDN}"
+        username = "focus"
+        password = "${CPUID}"
+        muc_jids = "JvbBrewery@internal.auth.${FQDN}"
+        muc_nickname = "${MUC_NICK}"
+        disable_certificate_verification = true
+      }
+    }
+  }
+}
+
 videobridge {
-  rest {
-     debug {
-       enabled = true
-     }
-     health {
-       enabled = true
-     }
-     shutdown {
-       enabled = true
-     }
-     version {
-       enabled = true
-     }
-  }
-  entity-expiration {
-    timeout=1 minute
-    check-interval=\${videobridge.entity-expiration.timeout}
-  }
-  health {
-    interval=60 seconds
-    timeout=30 seconds
-    max-check-duration=3 seconds
-    sticky-failures=false
-  }
-  ep-connection-status {
-    first-transfer-timeout=15 seconds
-    max-inactivity-limit=3 seconds
-    check-interval=500 milliseconds
-  }
-  cc {
-    bwe-change-threshold=0.15
-    thumbnail-max-height-px=180
-    onstage-ideal-height-px=1080
-    onstage-preferred-height-px=360
-    onstage-preferred-framerate=30
-    allow-oversend-onstage=true
-    max-oversend-bitrate=500 kbps
-    trust-bwe=true
-    padding-period=15ms
-    max-time-between-calculations = 15 seconds
-    jvb-last-n = -1
-  }
-  apis {
-    xmpp-client {
-      presence-interval = \${videobridge.stats.interval}
-      stats-filter {
-        enabled = false
-        whitelist = ["average_participant_stress", "current_timestamp", "graceful_shutdown",
-           "octo_version", "region", "relay_id", "stress_level", "version"]
-      }
-      jid-cache-size = 1000
-      configs {
-        xmpp-server-1 {
-          hostname="${FQDN}"
-          domain = "auth.${FQDN}"
-          username = "focus"
-          password = "${CPUID}"
-          muc_jids = "JvbBrewery@internal.auth.${FQDN}"
-          muc_nickname = "${MUC_NICK}"
-          disable_certificate_verification = true
-        }
-      }
-    }
-    rest {
-      enabled = true
-    }
-    jvb-api {
-      enabled = false
-    }
-  }
   http-servers {
-    public {
-      port = 9090
-      tls-port = 8444
-    }
-    private {
-      host = 127.0.0.1
-      port = 8082
-      tls-port = 8445
-    }
-  }
-  octo {
-    enabled=false
-    bind-port=4096
-    recv-queue-size=1024
-    send-queue-size=1024
-  }
-  load-management {
-    reducer-enabled = false
-    load-measurements {
-      packet-rate {
-        load-threshold = 50000
-        recovery-threshold = 40000
+      public {
+        host = 0.0.0.0
+        port = 9090
+        send-server-version = false
       }
-    }
-    load-reducers {
-      last-n {
-        reduction-scale = .75
-        recover-scale = 1.25
-        impact-time = 1 minute
-        minimum-last-n-value = 1
-        maximum-enforced-last-n-value = 40
-      }
-    }
-    conference-last-n-limits {
-    }
-    average-participant-stress = 0.01
-  }
-  sctp {
-    enabled=true
   }
   stats {
-    enabled=true
-    interval = 5 seconds
-    callstats {
-      app-id = 0
-      bridge-id = "jitsi"
-      interval = \${videobridge.stats.interval}
-    }
+      enabled = true
   }
   websockets {
-    enabled=true
-    server-id="default-id"
-    enable-compression = true
-    tls=true
-    domain="${FQDN}"
+      enabled = true
+      domain = "${FQDN}:443"
+      tls = true
   }
-  ice {
-    tcp {
-      enabled = false
-      port = 443
-      ssltcp = true
-    }
-    udp {
-        port = 10000
-    }
-    keep-alive-strategy = "selected_and_tcp"
-    use-component-socket = true
-    resolve-remote-candidates = false
-    nomination-strategy = "NominateFirstValid"
-  }
-  transport {
-    send {
-      queue-size=1024
-    }
-  }
-  multi-stream {
-    enabled = false
-  }
-  speech-activity {
-    recent-speakers-count = 10
-  }
-  loudest {
-      route-loudest-only = false
-      num-loudest = 3
-      always-route-dominant = true
-      energy-expire-time = 150 milliseconds
-      energy-alpha-pct = 50
-  }
-  version {
-    announce = false
-  }
-  graceful-shutdown-delay = 1 minute
 }
 EOVBAPPCONF
-
-cat > /etc/jitsi/videobridge/jitsi-videobridge.conf <<EOVBCONF
-JVB_HOSTNAME=${FQDN}
-JVB_HOST=${FQDN}
-JVB_PORT=5347
-JVB_SECRET=${CPUID}
-JVB_OPTS="--apis=xmpp,rest"
-JAVA_SYS_PROPS="-Dnet.java.sip.communicator.SC_HOME_DIR_LOCATION=/etc/jitsi\
- -Dnet.java.sip.communicator.SC_HOME_DIR_NAME=videobridge\
- -Dnet.java.sip.communicator.SC_LOG_DIR_LOCATION=/var/log/jitsi-videobridge\
- -Djava.util.logging.config.file=/etc/jitsi/videobridge/logging.properties\
- -Dconfig.file=/etc/jitsi/videobridge/application.conf"
-EOVBCONF
-
-cat > /etc/jitsi/videobridge/sip-communicator.properties <<EOVBSIP
-org.jitsi.videobridge.ENABLE_STATISTICS=true
-org.jitsi.videobridge.STATISTICS_TRANSPORT=muc,colibri,pubsub
-org.jitsi.videobridge.xmpp.user.xmppserver2.HOSTNAME=localhost
-org.jitsi.videobridge.xmpp.user.xmppserver2.DOMAIN=auth.${FQDN}
-org.jitsi.videobridge.xmpp.user.xmppserver2.USERNAME=jvb
-org.jitsi.videobridge.xmpp.user.xmppserver2.PASSWORD=${CPUID}
-org.jitsi.videobridge.xmpp.user.xmppserver2.MUC_JIDS=JvbBrewery@internal.auth.${FQDN}
-org.jitsi.videobridge.xmpp.user.xmppserver2.MUC=JvbBrewery@internal.auth.${FQDN}
-org.jitsi.videobridge.xmpp.user.xmppserver2.MUC_NICKNAME=${MUC_NICK}
-org.jitsi.videobridge.xmpp.user.xmppserver2.DISABLE_CERTIFICATE_VERIFICATION=true
-org.ice4j.ice.harvest.DISABLE_AWS_HARVESTER=true
-org.jitsi.videobridge.DISABLE_TCP_HARVESTER=true
-# If meet is behind NAT uncomment and configure local and public IP here
-#org.ice4j.ice.harvest.NAT_HARVESTER_LOCAL_ADDRESS=192.168.0.1
-#org.ice4j.ice.harvest.NAT_HARVESTER_PUBLIC_ADDRESS=1.2.3.4
-org.jitsi.videobridge.SINGLE_PORT_HARVESTER_PORT=10000
-EOVBSIP
 
 rm -rf /var/lib/prosody/*
 for i in auth avmoderation breakout conference conferenceduration focus guest internal.auth jitsi-videobridge lobby recorder speakerstats; do
