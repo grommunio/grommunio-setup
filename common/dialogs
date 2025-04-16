@@ -109,19 +109,21 @@ get_features()
 			"archive" "optional"  off 2>"${TMPF}"
 	dialog_exit $?
 	for i in $(cat ${TMPF}) ; do
-		if ! [ "$i" == "core" ] && ! [ "$1" == "meet" ] ; then
-			eval FT_${i^^}=true
-			FT_PACKAGES="$FT_PACKAGES grommunio-${i}"
-		fi
-		if [ "$i" == "office" ] ; then
-			FT_PACKAGES="$FT_PACKAGES rabbitmq-server"
-		fi
-		if [ "$i" == "archive" ] ; then
-			FT_PACKAGES="$FT_PACKAGES sphinx"
-		fi
-		if [ "$i" == "meet" ] ; then
-			FT_PACKAGES="$FT_PACKAGES jitsi-jibri jitsi-jicofo jitsi-jigasi jitsi-videobridge jitsi-meet jitsi-meet-prosody-plugins jitsi-meet-branding-grommunio prosody"
-		fi
+                if [ "$i" == "chat" ] ; then
+                        FT_PACKAGES="$FT_PACKAGES grommunio-${i}"
+                fi
+                if [ "$i" == "meet" ] ; then
+                        FT_PACKAGES="$FT_PACKAGES jitsi-jibri jitsi-jicofo jitsi-jigasi jitsi-videobridge jitsi-meet jitsi-meet-prosody-plugins jitsi-meet-branding-grommunio prosody"
+                fi
+                if [ "$i" == "files" ] ; then
+                        FT_PACKAGES="$FT_PACKAGES grommunio-${i}"
+                fi
+                if [ "$i" == "office" ] ; then
+                        FT_PACKAGES="$FT_PACKAGES grommunio-${i} rabbitmq-server"
+                fi
+                if [ "$i" == "archive" ] ; then
+                        FT_PACKAGES="$FT_PACKAGES grommunio-${i} sphinx"
+                fi
 	done
 }
 
