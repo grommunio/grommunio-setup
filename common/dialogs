@@ -111,18 +111,23 @@ get_features()
 	for i in $(cat ${TMPF}) ; do
                 if [ "$i" == "chat" ] ; then
                         FT_PACKAGES="$FT_PACKAGES grommunio-${i}"
+			FT_CHAT="true"
                 fi
                 if [ "$i" == "meet" ] ; then
                         FT_PACKAGES="$FT_PACKAGES jitsi-jibri jitsi-jicofo jitsi-jigasi jitsi-videobridge jitsi-meet jitsi-meet-prosody-plugins jitsi-meet-branding-grommunio prosody"
+			FT_MEET="true"
                 fi
                 if [ "$i" == "files" ] ; then
                         FT_PACKAGES="$FT_PACKAGES grommunio-${i}"
+			FT_FILES="true"
                 fi
                 if [ "$i" == "office" ] ; then
                         FT_PACKAGES="$FT_PACKAGES grommunio-${i} rabbitmq-server"
+			FT_OFFICE="true"
                 fi
                 if [ "$i" == "archive" ] ; then
                         FT_PACKAGES="$FT_PACKAGES grommunio-${i} sphinx"
+			FT_ARCHIVE="true"
                 fi
 	done
 }
