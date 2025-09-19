@@ -785,7 +785,7 @@ EOFILESCONF
     sudo -u grofiles ./occ -q -n theming:config logoheader /usr/share/grommunio-files/logo.svg >>"${LOGFILE}" 2>&1
     sudo -u grofiles ./occ -q -n theming:config favicon /usr/share/grommunio-files/favicon.svg >>"${LOGFILE}" 2>&1
     sudo -u grofiles ./occ -q -n theming:config background /usr/share/grommunio-files/background.jpg >>"${LOGFILE}" 2>&1
-    sudo -u grofiles ./occ -q -n theming:config disable-user-theming true >>"${LOGFILE}" 2>&1
+    sudo -u grofiles ./occ -q -n theming:config -r disable-user-theming >>"${LOGFILE}" 2>&1
     sudo -u grofiles ./occ -q -n theming:config slogan 'filesync & sharing' >>"${LOGFILE}" 2>&1
     sudo -u grofiles ./occ -q -n theming:config url 'https://grommunio.com' >>"${LOGFILE}" 2>&1
     sudo -u grofiles ./occ -q -n theming:config color '#0072B0' >>"${LOGFILE}" 2>&1
@@ -795,6 +795,8 @@ EOFILESCONF
     sudo -u grofiles ./occ -q -n config:system:set mail_domain --value="${DOMAIN}" >>"${LOGFILE}" 2>&1
     sudo -u grofiles ./occ -q -n config:system:set mail_smtphost --value='localhost' >>"${LOGFILE}" 2>&1
     sudo -u grofiles ./occ -q -n config:system:set mail_smtpport --value='25' >>"${LOGFILE}" 2>&1
+    sudo -u grofiles ./occ -q -n config:system:set maintenance_window_start --type=integer --value=1 >>"${LOGFILE}" 2>&1
+    sudo -u grofiles ./occ -q -n config:system:set check_for_working_wellknown_setup --type=integer --value=0 >>"${LOGFILE}" 2>&1
   popd || return
 
   systemctl enable grommunio-files-cron.service >>"${LOGFILE}" 2>&1
