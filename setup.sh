@@ -623,7 +623,7 @@ user = ${MYSQL_USER}
 password = ${MYSQL_PASS}
 hosts = ${MYSQL_HOST}
 dbname = ${MYSQL_DB}
-query = SELECT 1 FROM domains WHERE domain_status=0 AND domainname='%s'
+query = SELECT 1 FROM domains WHERE domain_status=0 AND domainname=_utf8mb4'%s'
 EOF
 
 cat > /etc/postfix/grommunio-virtual-mailbox-alias-maps.cf <<EOF
@@ -631,7 +631,7 @@ user = ${MYSQL_USER}
 password = ${MYSQL_PASS}
 hosts = ${MYSQL_HOST}
 dbname = ${MYSQL_DB}
-query = SELECT mainname FROM aliases WHERE aliasname='%s' UNION select destination FROM forwards WHERE username='%s' AND forward_type = 1
+query = SELECT mainname FROM aliases WHERE aliasname=_utf8mb4'%s' UNION SELECT destination FROM forwards WHERE username=_utf8mb4'%s' AND forward_type = 1
 EOF
 
 cat > /etc/postfix/grommunio-virtual-mailbox-maps.cf <<EOF
@@ -639,7 +639,7 @@ user = ${MYSQL_USER}
 password = ${MYSQL_PASS}
 hosts = ${MYSQL_HOST}
 dbname = ${MYSQL_DB}
-query = SELECT 1 FROM users WHERE username='%s'
+query = SELECT 1 FROM users WHERE username=_utf8mb4'%s'
 EOF
 
 cat > /etc/postfix/grommunio-bcc-forwards.cf <<EOF
@@ -647,7 +647,7 @@ user = ${MYSQL_USER}
 password = ${MYSQL_PASS}
 hosts = ${MYSQL_HOST}
 dbname = ${MYSQL_DB}
-query = SELECT destination FROM forwards WHERE username='%s' AND forward_type = 0
+query = SELECT destination FROM forwards WHERE username=_utf8mb4'%s' AND forward_type = 0
 EOF
 
 postconf -e \
