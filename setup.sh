@@ -110,6 +110,15 @@ set_repo() {
 
 }
 
+# Check if we already have credentials populated by any other means.
+if [[ -e /etc/grommunio-admin-common/license/credentials.txt ]]; then
+  CREDENTIALS=$(cat /etc/grommunio-admin-common/license/credentials.txt)
+  if grommunio-repo supported > /dev/null 2>&1; then
+    REPO_USER="${CREDENTIALS%:*}"
+    REPO_PASS="${CREDENTIALS#*:}"
+  fi
+fi
+
 set_repo
 REPO_USER=$(sed -n '1{p;q}' "${TMPF}")
 REPO_PASS=$(sed -n '2{p;q}' "${TMPF}")
