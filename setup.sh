@@ -41,7 +41,10 @@ if [ "${DELCONFIRM}" != "removealldata" ] ; then
 else
   writelog "Deleting existing installation after confirmation"
   echo "drop database grommunio;" | mysql
-  rm -rf /var/lib/gromox/user/* /var/lib/gromox/domain/* /etc/grommunio-common/ssl/* /etc/grommunio-common/setup_done
+  rm -rf /var/lib/gromox/{user,domain,queue/{cache,mess,save,timer}}/* \
+    /etc/grommunio-common/ssl/* /etc/grommunio-common/setup_done \
+    /var/lib/grommunio-web/{session,tmp/{attachments,session},sqlite-index}/* \
+    /var/lib/gromox/timer.txt
 fi
 fi
 
