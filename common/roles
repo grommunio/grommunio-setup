@@ -1,0 +1,609 @@
+#!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2021 grommunio GmbH
+#
+# Role (optional feature) lifecycle: add, keep (idempotent re-run) and remove.
+#
+# Design contract (see grommunio-setup README / setup.sh):
+#  - KEEP   (role selected and already installed): leave data, credentials and
+#           configuration untouched; only make sure services are enabled.
+#  - ADD    (role newly selected): if a removal backup of its credential/key
+#           configuration exists, restore it and re-attach to the preserved
+#           database/data; otherwise perform a first-time installation.
+#  - REMOVE (role deselected): stop and disable services, strip cross-component
+#           integration, back up credential/key configuration, uninstall the
+#           role packages and update the persistent state - but KEEP the
+#           database and data directory so the role can be re-added later.
+#
+# Databases are never dropped here; that only happens in the explicit
+# "from scratch" path in setup.sh.
+
+ROLE_BACKUP_BASE="/etc/grommunio-common/setup-backup"
+
+# role_action ROLE -> echoes add|keep|remove|none based on the desired (FT_*)
+# vs. previously-recorded (WAS_*) state.
+role_action()
+{
+	local u
+	u=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+	local now was
+	eval "now=\${FT_${u}:-false}"
+	eval "was=\${WAS_${u}:-false}"
+	if [ "${now}" = "true" ] && [ "${was}" = "true" ]; then
+		echo keep
+	elif [ "${now}" = "true" ]; then
+		echo add
+	elif [ "${was}" = "true" ]; then
+		echo remove
+	else
+		echo none
+	fi
+}
+
+# Files whose contents must survive package removal so a later re-add can
+# re-attach to the preserved database/data (credentials, encryption keys).
+role_state_files()
+{
+	case "$1" in
+		chat)    echo "/etc/grommunio-chat/config.json /etc/grommunio-admin-api/conf.d/chat.yaml" ;;
+		files)   echo "/usr/share/grommunio-files/config/config.php" ;;
+		office)  echo "/etc/grommunio-office/default.json" ;;
+		archive) echo "/etc/grommunio-archive/config-site.php /etc/grommunio-archive/grommunio-archive.conf /etc/grommunio-archive/grommunio-archive.key /etc/sphinx/sphinx.conf" ;;
+		*)       echo "" ;;
+	esac
+}
+
+backup_role()
+{
+	local role="$1" dir f
+	dir="${ROLE_BACKUP_BASE}/${role}"
+	mkdir -p "${dir}"
+	chmod 0700 "${ROLE_BACKUP_BASE}" "${dir}" 2>/dev/null
+	for f in $(role_state_files "${role}"); do
+		if [ -e "${f}" ]; then
+			cp -a "${f}" "${dir}/" >>"${LOGFILE}" 2>&1
+		fi
+	done
+}
+
+# restore_role ROLE: if a backup exists, restore its files and return 0 (the
+# caller then skips first-time initialization); otherwise return 1.
+restore_role()
+{
+	local role="$1" dir f base restored=1
+	dir="${ROLE_BACKUP_BASE}/${role}"
+	[ -d "${dir}" ] || return 1
+	for f in $(role_state_files "${role}"); do
+		base="${f##*/}"
+		if [ -e "${dir}/${base}" ]; then
+			mkdir -p "${f%/*}"
+			cp -a "${dir}/${base}" "${f}" >>"${LOGFILE}" 2>&1
+			restored=0
+		fi
+	done
+	return ${restored}
+}
+
+# ensure_db HOST USER PASS DB - create the database/user/grant idempotently,
+# never dropping. For a remote server the role user is assumed to exist.
+ensure_db()
+{
+	local host="$1" user="$2" pass="$3" db="$4"
+	if [ "${host}" = "localhost" ]; then
+		echo "create database if not exists \`${db}\`; \
+		      create user if not exists '${user}'@'${host}' identified by '${pass}'; \
+		      alter user '${user}'@'${host}' identified by '${pass}'; \
+		      grant all on \`${db}\`.* to '${user}'@'${host}';" | mysql >>"${LOGFILE}" 2>&1
+	else
+		echo "create database if not exists \`${db}\`;" | mysql -h"${host}" -u"${user}" -p"${pass}" "${db}" >>"${LOGFILE}" 2>&1
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# chat
+# ---------------------------------------------------------------------------
+setup_role_chat()
+{
+	local action
+	action=$(role_action chat)
+	CHAT_CONFIG="/etc/grommunio-chat/config.json"
+
+	if [ "${action}" = "keep" ]; then
+		systemctl enable grommunio-chat >>"${LOGFILE}" 2>&1
+		systemctl start grommunio-chat >>"${LOGFILE}" 2>&1
+		return 0
+	fi
+
+	writelog "Config feature chat: setting up (${action})."
+	systemctl stop grommunio-chat >>"${LOGFILE}" 2>&1
+
+	# Re-add against preserved data: restore the previous config and re-attach.
+	if restore_role chat; then
+		writelog "Config feature chat: restored previous configuration."
+		chown -R grochat:grochat "/etc/grommunio-chat/" "/var/log/grommunio-chat" "/var/lib/grommunio-chat/" >>"${LOGFILE}" 2>&1
+		chmod 640 "${CHAT_CONFIG}"
+		systemctl enable grommunio-chat >>"${LOGFILE}" 2>&1
+		systemctl restart grommunio-chat >>"${LOGFILE}" 2>&1
+		state_set FT_CHAT true
+		return 0
+	fi
+
+	CHAT_MYSQL_HOST="${CHAT_MYSQL_HOST:-localhost}"
+	CHAT_MYSQL_USER="${CHAT_MYSQL_USER:-grochat}"
+	CHAT_MYSQL_DB="${CHAT_MYSQL_DB:-grochat}"
+	[ -n "${CHAT_MYSQL_PASS}" ] || CHAT_MYSQL_PASS=$(randpw)
+	set_chat_mysql_param
+	ensure_db "${CHAT_MYSQL_HOST}" "${CHAT_MYSQL_USER}" "${CHAT_MYSQL_PASS}" "${CHAT_MYSQL_DB}"
+
+	CHAT_DB_CON="${CHAT_MYSQL_USER}:${CHAT_MYSQL_PASS}@tcp\(${CHAT_MYSQL_HOST}:3306\)\/${CHAT_MYSQL_DB}?charset=utf8mb4,utf8\&readTimeout=30s\&writeTimeout=30s"
+	sed -i 's#^.*"DataSource":.*#        "DataSource": "'"${CHAT_DB_CON}"'",#g' "${CHAT_CONFIG}"
+	sed -i 's#^.*"DriverName": "postgres".*#        "DriverName": "mysql",#g' "${CHAT_CONFIG}"
+	sed -i 's#^.*"EnableAPIUserDeletion":.*#        "EnableAPIUserDeletion": true,#g' "${CHAT_CONFIG}"
+	sed -i 's|"SiteURL": "",|"SiteURL": "https://'"${FQDN}"'/chat",|g' "${CHAT_CONFIG}"
+	touch "/var/log/grommunio-chat/mattermost.log"
+	chown -R grochat:grochat "/etc/grommunio-chat/" "/usr/share/grommunio-chat/logs" "/usr/share/grommunio-chat/config" "/var/log/grommunio-chat" "/var/lib/grommunio-chat/"
+	chmod 644 "${CHAT_CONFIG}"
+	systemctl enable grommunio-chat >>"${LOGFILE}" 2>&1
+	systemctl restart grommunio-chat >>"${LOGFILE}" 2>&1
+	dialog_chat_adminpass
+	# wait for the grommunio-chat unix socket, sometimes a second restart required for bind (db population)
+	if ! [ -e "/var/tmp/grommunio-chat_local.socket" ] ; then
+		systemctl restart grommunio-chat
+		for n in $(seq 1 30) ; do
+			if [ -e "/var/tmp/grommunio-chat_local.socket" ] ; then
+				writelog "chat socket /var/tmp/grommunio-chat_local.socket appeared after $((n*3)) seconds."
+				break
+			fi
+			sleep 3
+		done
+	fi
+	pushd /usr/share/grommunio-chat/ || return
+		MMCTL_LOCAL_SOCKET_PATH=/var/tmp/grommunio-chat_local.socket bin/grommunio-chat-ctl --local user create --email admin@localhost --username admin --password "${CHAT_ADMIN_PASS}" --system-admin >>"${LOGFILE}" 2>&1
+	popd || return
+
+cat > /etc/grommunio-admin-api/conf.d/chat.yaml <<EOCHAT
+chat:
+  connection:
+    login_id: admin
+    password: '${CHAT_ADMIN_PASS}'
+    url: ${FQDN}
+    basepath: /chat/api/v4
+    port: 443
+    scheme: https
+    verify: False
+EOCHAT
+
+	chmod 640 "${CHAT_CONFIG}"
+
+	state_set FT_CHAT true
+	state_set CHAT_MYSQL_HOST "${CHAT_MYSQL_HOST}"
+	state_set CHAT_MYSQL_USER "${CHAT_MYSQL_USER}"
+	state_set CHAT_MYSQL_PASS "${CHAT_MYSQL_PASS}"
+	state_set CHAT_MYSQL_DB "${CHAT_MYSQL_DB}"
+}
+
+# ---------------------------------------------------------------------------
+# meet
+# ---------------------------------------------------------------------------
+setup_role_meet()
+{
+	local action
+	action=$(role_action meet)
+	if [ "${action}" = "keep" ]; then
+		systemctl enable prosody jitsi-videobridge jitsi-jicofo >>"${LOGFILE}" 2>&1
+		systemctl start prosody jitsi-videobridge jitsi-jicofo >>"${LOGFILE}" 2>&1
+		return 0
+	fi
+	writelog "Config feature meet: Starting to setup meet."
+	. "${DATADIR}/parts/grommunio-meet.sh"
+	writelog "Config feature meet: Meet setup finished."
+	state_set FT_MEET true
+}
+
+# ---------------------------------------------------------------------------
+# files
+# ---------------------------------------------------------------------------
+# Bring the Nextcloud database schema in line with the installed code after a
+# package update (the web upgrade path is disabled). A no-op / harmless when the
+# instance is already at the latest version.
+files_occ_upgrade()
+{
+	pkg_installed grommunio-files || return 0
+	[ -x /usr/share/grommunio-files/occ ] || return 0
+	( cd /usr/share/grommunio-files && sudo -u grofiles ./occ -q -n upgrade ) >>"${LOGFILE}" 2>&1
+	( cd /usr/share/grommunio-files && sudo -u grofiles ./occ -q -n maintenance:mode --off ) >>"${LOGFILE}" 2>&1
+	return 0
+}
+
+# Wire the OnlyOffice document server into grommunio-files. Idempotent (occ
+# config writes), so it is safe to (re-)run whenever both roles are present.
+wire_files_office()
+{
+	[ "${FT_FILES}" = "true" ] || return 0
+	pkg_installed grommunio-files || return 0
+	[ -x /usr/share/grommunio-files/occ ] || return 0
+	pushd /usr/share/grommunio-files >/dev/null 2>&1 || return 0
+		sudo -u grofiles ./occ -q -n config:system:set --type boolean --value="true" csrf.disabled >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:app:set onlyoffice DocumentServerUrl --value="https://${FQDN}/office/" >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:app:set onlyoffice DocumentServerInternalUrl --value="https://${FQDN}/office/" >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:app:set onlyoffice StorageUrl --value="https://${FQDN}/files/" >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:app:set onlyoffice customizationChat --value=false >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:app:set onlyoffice customizationCompactHeader --value=true >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:app:set onlyoffice customizationFeedback --value=false >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:app:set onlyoffice customizationToolbarNoTabs --value=true >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:app:set onlyoffice preview --value=false >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:app:set onlyoffice sameTab --value=true >>"${LOGFILE}" 2>&1
+	popd >/dev/null 2>&1 || return 0
+}
+
+setup_role_files()
+{
+	local action
+	action=$(role_action files)
+
+	if [ "${action}" = "keep" ]; then
+		# A package update may have bumped the Nextcloud schema; migrate the DB
+		# to match the code (web upgrade is disabled, so it cannot self-heal).
+		files_occ_upgrade
+		systemctl enable grommunio-files-cron.service grommunio-files-cron.timer >>"${LOGFILE}" 2>&1
+		systemctl start grommunio-files-cron.timer >>"${LOGFILE}" 2>&1
+		return 0
+	fi
+
+	writelog "Config feature files: setting up (${action})."
+	FILES_MYSQL_HOST="${FILES_MYSQL_HOST:-localhost}"
+	FILES_MYSQL_USER="${FILES_MYSQL_USER:-grofiles}"
+	FILES_MYSQL_DB="${FILES_MYSQL_DB:-grofiles}"
+	[ -n "${FILES_MYSQL_PASS}" ] || FILES_MYSQL_PASS=$(randpw)
+
+	# Re-add against preserved data: restore the Nextcloud config (instanceid,
+	# secret, db credentials) so it re-attaches to the kept database/data dir.
+	if restore_role files; then
+		writelog "Config feature files: restored previous configuration."
+		files_occ_upgrade
+		systemctl enable grommunio-files-cron.service grommunio-files-cron.timer >>"${LOGFILE}" 2>&1
+		systemctl start grommunio-files-cron.timer >>"${LOGFILE}" 2>&1
+		state_set FT_FILES true
+		return 0
+	fi
+
+	set_files_mysql_param
+	ensure_db "${FILES_MYSQL_HOST}" "${FILES_MYSQL_USER}" "${FILES_MYSQL_PASS}" "${FILES_MYSQL_DB}"
+
+	# Safety net: if the database is already populated (e.g. a prior install
+	# whose config backup is gone) we must not clobber config.php and re-run
+	# maintenance:install, which would fail and could lose data. Re-attaching
+	# needs the original instanceid/secret which we do not have here.
+	if [ "${FILES_MYSQL_HOST}" = "localhost" ] && mysql_table_exists "${FILES_MYSQL_DB}" oc_appconfig; then
+		writelog "Config feature files: database '${FILES_MYSQL_DB}' already populated but no config backup found; skipping (re)install to avoid data loss. Restore config.php manually or use the from-scratch reset."
+		systemctl enable grommunio-files-cron.service grommunio-files-cron.timer >>"${LOGFILE}" 2>&1
+		systemctl start grommunio-files-cron.timer >>"${LOGFILE}" 2>&1
+		state_set FT_FILES true
+		return 0
+	fi
+
+	dialog_files_adminpass
+
+cat > /usr/share/grommunio-files/config/config.php <<'EOFILESCONF'
+<?php
+$CONFIG = array (
+  'overwritewebroot' => '/files',
+  'datadirectory' => '/var/lib/grommunio-files/data',
+  'logfile' => '/var/log/grommunio-files/files.log',
+  'theme' => 'theme-grommunio',
+  'logtimezone' => 'UTC',
+  'apps_paths' =>
+  array (
+    0 =>
+    array (
+      'path' => '/usr/share/grommunio-files/apps',
+      'url' => '/apps',
+      'writable' => false,
+    ),
+    1 =>
+    array (
+      'path' => '/var/lib/grommunio-files/apps-external',
+      'url' => '/apps-external',
+      'writable' => true,
+    ),
+  ),
+  'memcache.local' => '\\OC\\Memcache\\Redis',
+  'filelocking.enabled' => true,
+  'memcache.locking' => '\\OC\\Memcache\\Redis',
+  'upgrade.disable-web' => true,
+  'upgrade.automatic-app-update' => true,
+  'updater.server.url' => '127.0.0.1',
+  'integrity.check.disabled' => false,
+);
+EOFILESCONF
+
+	pushd /usr/share/grommunio-files || return
+		rm -rf data/admin >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n maintenance:install --database=mysql --database-name="${FILES_MYSQL_DB}" --database-user="${FILES_MYSQL_USER}" --database-pass="${FILES_MYSQL_PASS}" --admin-user=admin --admin-pass="${FILES_ADMIN_PASS}" --data-dir=/var/lib/grommunio-files/data >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set trusted_domains 1 --value="${FQDN}" >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set trusted_domains 2 --value="${DOMAIN}" >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set trusted_domains 3 --value="mail.${DOMAIN}" >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n app:enable user_external >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set user_backends 0 arguments 0 --value="https://${FQDN}/dav" >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set user_backends 0 class --value='\OCA\UserExternal\BasicAuth' >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n app:enable onlyoffice >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set integrity.check.disabled --type boolean --value true >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n theming:config name 'grommunio Files' >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n theming:config logo /usr/share/grommunio-files/logo.svg >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n theming:config logoheader /usr/share/grommunio-files/logo.svg >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n theming:config favicon /usr/share/grommunio-files/favicon.svg >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n theming:config background /usr/share/grommunio-files/background.jpg >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n theming:config -r disable-user-theming >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n theming:config slogan 'filesync & sharing' >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n theming:config url 'https://grommunio.com' >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n theming:config color '#0072B0' >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set mail_from_address --value='admin' >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set mail_smtpmode --value='sendmail' >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set mail_sendmailmode --value='smtp' >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set mail_domain --value="${DOMAIN}" >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set mail_smtphost --value='localhost' >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set mail_smtpport --value='25' >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set maintenance_window_start --type=integer --value=1 >>"${LOGFILE}" 2>&1
+		sudo -u grofiles ./occ -q -n config:system:set check_for_working_wellknown_setup --type=integer --value=0 >>"${LOGFILE}" 2>&1
+	popd || return
+
+	systemctl enable grommunio-files-cron.service >>"${LOGFILE}" 2>&1
+	systemctl enable grommunio-files-cron.timer >>"${LOGFILE}" 2>&1
+	systemctl start grommunio-files-cron.timer >>"${LOGFILE}" 2>&1
+
+	state_set FT_FILES true
+	state_set FILES_MYSQL_HOST "${FILES_MYSQL_HOST}"
+	state_set FILES_MYSQL_USER "${FILES_MYSQL_USER}"
+	state_set FILES_MYSQL_PASS "${FILES_MYSQL_PASS}"
+	state_set FILES_MYSQL_DB "${FILES_MYSQL_DB}"
+}
+
+# ---------------------------------------------------------------------------
+# office
+# ---------------------------------------------------------------------------
+setup_role_office()
+{
+	local action
+	action=$(role_action office)
+
+	office_start_services()
+	{
+		systemctl enable rabbitmq-server.service >>"${LOGFILE}" 2>&1
+		systemctl start rabbitmq-server.service >>"${LOGFILE}" 2>&1
+		systemctl start ds-themegen.service ds-fontgen.service >>"${LOGFILE}" 2>&1
+		systemctl enable ds-converter.service ds-docservice.service >>"${LOGFILE}" 2>&1
+		systemctl start ds-converter.service ds-docservice.service >>"${LOGFILE}" 2>&1
+	}
+
+	if [ "${action}" = "keep" ]; then
+		office_start_services
+		wire_files_office
+		return 0
+	fi
+
+	writelog "Config feature office: setting up (${action})."
+	OFFICE_MYSQL_HOST="${OFFICE_MYSQL_HOST:-localhost}"
+	OFFICE_MYSQL_USER="${OFFICE_MYSQL_USER:-groffice}"
+	OFFICE_MYSQL_DB="${OFFICE_MYSQL_DB:-groffice}"
+
+	# Re-add against preserved data: reuse the credentials from the restored
+	# config (do NOT rotate the DB-user password, which would desync from the
+	# preserved database) and re-attach.
+	if restore_role office; then
+		writelog "Config feature office: restored previous configuration."
+		OFFICE_MYSQL_HOST=$(jq -r '.services.CoAuthoring.sql.dbHost // "localhost"' /etc/grommunio-office/default.json 2>/dev/null)
+		OFFICE_MYSQL_DB=$(jq -r '.services.CoAuthoring.sql.dbName // "groffice"' /etc/grommunio-office/default.json 2>/dev/null)
+		OFFICE_MYSQL_USER=$(jq -r '.services.CoAuthoring.sql.dbUser // "groffice"' /etc/grommunio-office/default.json 2>/dev/null)
+		OFFICE_MYSQL_PASS=$(jq -r '.services.CoAuthoring.sql.dbPass // ""' /etc/grommunio-office/default.json 2>/dev/null)
+		office_start_services
+		wire_files_office
+		state_set FT_OFFICE true
+		state_set OFFICE_MYSQL_HOST "${OFFICE_MYSQL_HOST}"
+		state_set OFFICE_MYSQL_USER "${OFFICE_MYSQL_USER}"
+		state_set OFFICE_MYSQL_PASS "${OFFICE_MYSQL_PASS}"
+		state_set OFFICE_MYSQL_DB "${OFFICE_MYSQL_DB}"
+		return 0
+	fi
+
+	[ -n "${OFFICE_MYSQL_PASS}" ] || OFFICE_MYSQL_PASS=$(randpw)
+	set_office_mysql_param
+	ensure_db "${OFFICE_MYSQL_HOST}" "${OFFICE_MYSQL_USER}" "${OFFICE_MYSQL_PASS}" "${OFFICE_MYSQL_DB}"
+
+	# Initialise the schema only if the database is empty (never modify the
+	# package-provided schema file in place - work on a copy).
+	if ! mysql_table_exists "${OFFICE_MYSQL_DB}" doc_changes; then
+		local schema_tmp
+		schema_tmp=$(mktemp)
+		sed -e "/^CREATE DATABASE/d" -e "/^USE/d" /usr/libexec/grommunio-office/server/schema/mysql/createdb.sql > "${schema_tmp}"
+		mysql -h"${OFFICE_MYSQL_HOST}" -u"${OFFICE_MYSQL_USER}" -p"${OFFICE_MYSQL_PASS}" "${OFFICE_MYSQL_DB}" < "${schema_tmp}" >>"${LOGFILE}" 2>&1
+		rm -f "${schema_tmp}"
+	fi
+
+	# Write via a private temp file (not a predictable /tmp path) and copy the
+	# content back in place so default.json keeps its packaged ownership/perms
+	# rather than being recreated world-readable. The temp holds the DB password.
+	# Values are passed with --arg (not interpolated into the jq program) so a
+	# password containing quotes/backslashes cannot corrupt the program; the
+	# in-place copy is gated on a non-empty result so a jq failure never
+	# truncates default.json.
+	local office_tmp
+	office_tmp=$(mktemp)
+	jq --arg h "${OFFICE_MYSQL_HOST}" --arg n "${OFFICE_MYSQL_DB}" --arg u "${OFFICE_MYSQL_USER}" --arg p "${OFFICE_MYSQL_PASS}" \
+		'.services.CoAuthoring.sql.dbHost=$h | .services.CoAuthoring.sql.dbName=$n | .services.CoAuthoring.sql.dbUser=$u | .services.CoAuthoring.sql.dbPass=$p' \
+		/etc/grommunio-office/default.json > "${office_tmp}"
+	[ -s "${office_tmp}" ] && cat "${office_tmp}" > /etc/grommunio-office/default.json
+	rm -f "${office_tmp}"
+
+	office_start_services
+	wire_files_office
+
+	state_set FT_OFFICE true
+	state_set OFFICE_MYSQL_HOST "${OFFICE_MYSQL_HOST}"
+	state_set OFFICE_MYSQL_USER "${OFFICE_MYSQL_USER}"
+	state_set OFFICE_MYSQL_PASS "${OFFICE_MYSQL_PASS}"
+	state_set OFFICE_MYSQL_DB "${OFFICE_MYSQL_DB}"
+}
+
+# ---------------------------------------------------------------------------
+# archive
+# ---------------------------------------------------------------------------
+setup_role_archive()
+{
+	local action
+	action=$(role_action archive)
+
+	if [ "${action}" = "keep" ]; then
+		systemctl enable searchd.service grommunio-archive-smtp.service grommunio-archive.service >>"${LOGFILE}" 2>&1
+		systemctl start searchd.service grommunio-archive-smtp.service grommunio-archive.service >>"${LOGFILE}" 2>&1
+		# Re-assert the postfix archiver wiring (the core block above reset the
+		# recipient restrictions to the non-archive default) and restart postfix.
+		echo "/(.*)/   prepend X-Envelope-To: \$1" > /etc/postfix/grommunio-archiver-envelope.cf
+		archive_postfix_enable
+		systemctl restart postfix.service >>"${LOGFILE}" 2>&1
+		return 0
+	fi
+
+	writelog "Config feature archive: setting up (${action})."
+	ARCHIVE_MYSQL_HOST="${ARCHIVE_MYSQL_HOST:-localhost}"
+	ARCHIVE_MYSQL_USER="${ARCHIVE_MYSQL_USER:-groarchive}"
+	ARCHIVE_MYSQL_DB="${ARCHIVE_MYSQL_DB:-groarchive}"
+
+	archive_start_services()
+	{
+		writelog "Config stage: archive+postfix enable and restart"
+		systemctl enable searchd.service grommunio-archive-smtp.service grommunio-archive.service postfix.service >>"${LOGFILE}" 2>&1
+		systemctl restart searchd.service grommunio-archive-smtp.service grommunio-archive.service postfix.service >>"${LOGFILE}" 2>&1
+	}
+
+	# Re-add against preserved data: reuse the credentials from the restored
+	# config (do NOT rotate the DB-user password) and re-attach.
+	if restore_role archive; then
+		writelog "Config feature archive: restored previous configuration."
+		local v
+		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqluser) ; [ -n "${v}" ] && ARCHIVE_MYSQL_USER="${v}"
+		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqldb)   ; [ -n "${v}" ] && ARCHIVE_MYSQL_DB="${v}"
+		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqlpwd)  ; [ -n "${v}" ] && ARCHIVE_MYSQL_PASS="${v}"
+		echo "/(.*)/   prepend X-Envelope-To: \$1" > /etc/postfix/grommunio-archiver-envelope.cf
+		archive_postfix_enable
+		archive_start_services
+		state_set FT_ARCHIVE true
+		state_set ARCHIVE_MYSQL_HOST "${ARCHIVE_MYSQL_HOST}"
+		state_set ARCHIVE_MYSQL_USER "${ARCHIVE_MYSQL_USER}"
+		state_set ARCHIVE_MYSQL_PASS "${ARCHIVE_MYSQL_PASS}"
+		state_set ARCHIVE_MYSQL_DB "${ARCHIVE_MYSQL_DB}"
+		return 0
+	fi
+
+	[ -n "${ARCHIVE_MYSQL_PASS}" ] || ARCHIVE_MYSQL_PASS=$(randpw)
+	set_archive_mysql_param
+	ensure_db "${ARCHIVE_MYSQL_HOST}" "${ARCHIVE_MYSQL_USER}" "${ARCHIVE_MYSQL_PASS}" "${ARCHIVE_MYSQL_DB}"
+
+	dialog_archive_adminpass
+	dialog_archive_auditpass
+	if ! mysql_table_exists "${ARCHIVE_MYSQL_DB}" users; then
+		sed -e "s#grommunioArchiveAdmin#${ARCHIVE_ADMIN_PASS}#g" -e "s#grommunioArchiveAuditor#${ARCHIVE_AUDIT_PASS}#g" /usr/share/grommunio-archive/db-mysql.sql | mysql -h"${ARCHIVE_MYSQL_HOST}" -u"${ARCHIVE_MYSQL_USER}" -p"${ARCHIVE_MYSQL_PASS}" "${ARCHIVE_MYSQL_DB}"
+	fi
+
+	sed -e "s#MYHOSTNAME#${FQDN}#g" -e "s#MYSMTP#${DOMAIN}#g" -e "s/MYSQL_HOSTNAME/${ARCHIVE_MYSQL_HOST}/" -e "s/MYSQL_DATABASE/${ARCHIVE_MYSQL_DB}/" -e "s/MYSQL_PASSWORD/${ARCHIVE_MYSQL_PASS}/" -e "s/MYSQL_USERNAME/${ARCHIVE_MYSQL_USER}/" /etc/grommunio-archive/config-site.dist.php > /etc/grommunio-archive/config-site.php
+	# config-site.php carries the archive DB password - restrict to groarchive.
+	chgrp groarchive /etc/grommunio-archive/config-site.php
+	chmod 0640 /etc/grommunio-archive/config-site.php
+
+	cp -f /etc/grommunio-archive/grommunio-archive.conf.dist /etc/grommunio-archive/grommunio-archive.conf
+	chgrp groarchive /etc/grommunio-archive/grommunio-archive.conf
+	chmod g=r,o= /etc/grommunio-archive/grommunio-archive.conf
+	setconf /etc/grommunio-archive/grommunio-archive.conf mysqluser "${ARCHIVE_MYSQL_USER}" 0
+	setconf /etc/grommunio-archive/grommunio-archive.conf mysqlpwd "${ARCHIVE_MYSQL_PASS}" 0
+	setconf /etc/grommunio-archive/grommunio-archive.conf mysqldb "${ARCHIVE_MYSQL_DB}" 0
+	setconf /etc/grommunio-archive/grommunio-archive.conf listen_addr 0.0.0.0 0
+	setconf /etc/grommunio-archive/grommunio-archive.conf storedir /var/lib/grommunio-archive/store
+
+	php /etc/grommunio-archive/sphinx.conf.dist > /etc/sphinx/sphinx.conf
+	sed -i -e "s/MYSQL_HOSTNAME/${ARCHIVE_MYSQL_HOST}/" -e "s/MYSQL_DATABASE/${ARCHIVE_MYSQL_DB}/" -e "s/MYSQL_PASSWORD/${ARCHIVE_MYSQL_PASS}/" -e "s/MYSQL_USERNAME/${ARCHIVE_MYSQL_USER}/" /etc/sphinx/sphinx.conf
+	chown groarchive:sphinx /etc/sphinx/sphinx.conf
+	# sphinx.conf carries the archive DB password - keep it off world-read
+	# (owner/group groarchive:sphinx already have access).
+	chmod 0640 /etc/sphinx/sphinx.conf
+	chown groarchive:sphinx /var/lib/grommunio-archive/sphinx/ -R
+	chmod 775 /var/lib/grommunio-archive/sphinx/
+	sudo -u groarchive indexer --all
+
+	if [ ! -s /etc/grommunio-archive/grommunio-archive.key ]; then
+		< /dev/urandom head -c 56 > /etc/grommunio-archive/grommunio-archive.key
+	fi
+	# The archive encryption key must not be world-readable.
+	chgrp groarchive /etc/grommunio-archive/grommunio-archive.key
+	chmod 0640 /etc/grommunio-archive/grommunio-archive.key
+
+	echo "/(.*)/   prepend X-Envelope-To: \$1" > /etc/postfix/grommunio-archiver-envelope.cf
+	archive_postfix_enable
+	archive_start_services
+
+	writelog "groarchive admin user: admin@local"
+	writelog "groarchive admin pass: ${ARCHIVE_ADMIN_PASS}"
+	writelog "groarchive audit user: auditor@local"
+	writelog "groarchive audit pass: ${ARCHIVE_AUDIT_PASS}"
+
+	state_set FT_ARCHIVE true
+	state_set ARCHIVE_MYSQL_HOST "${ARCHIVE_MYSQL_HOST}"
+	state_set ARCHIVE_MYSQL_USER "${ARCHIVE_MYSQL_USER}"
+	state_set ARCHIVE_MYSQL_PASS "${ARCHIVE_MYSQL_PASS}"
+	state_set ARCHIVE_MYSQL_DB "${ARCHIVE_MYSQL_DB}"
+}
+
+# Wire postfix to bcc all mail into the archiver. Uses the shared core recipient
+# restrictions (CORE_RCPT_RESTRICTIONS) as the base.
+archive_postfix_enable()
+{
+	postconf -e "smtpd_recipient_restrictions=permit_sasl_authenticated,permit_mynetworks,check_recipient_access pcre:/etc/postfix/grommunio-archiver-envelope.cf,reject_unknown_recipient_domain,reject_non_fqdn_hostname,reject_non_fqdn_sender,reject_non_fqdn_recipient,reject_unauth_destination,reject_unauth_pipelining"
+	postconf -e "always_bcc=archive@${FQDN}"
+	echo "archive@${FQDN} smtp:[127.0.0.1]:2693" > /etc/postfix/transport
+	postmap /etc/postfix/transport
+}
+
+# Undo the postfix archiver wiring so mail flow is not impacted after removal.
+archive_postfix_disable()
+{
+	postconf -X always_bcc >>"${LOGFILE}" 2>&1
+	postconf -e "smtpd_recipient_restrictions=${CORE_RCPT_RESTRICTIONS}"
+	rm -f /etc/postfix/transport /etc/postfix/transport.db /etc/postfix/grommunio-archiver-envelope.cf
+	systemctl restart postfix.service >>"${LOGFILE}" 2>&1
+}
+
+# ---------------------------------------------------------------------------
+# generic removal
+# ---------------------------------------------------------------------------
+remove_role()
+{
+	local role="$1" u svc
+	u=$(echo "${role}" | tr '[:lower:]' '[:upper:]')
+	writelog "Removing role ${role} (keeping data)."
+
+	# Preserve credential/key configuration so the role can be re-added later.
+	backup_role "${role}"
+
+	# Role-specific integration teardown (before stopping services).
+	case "${role}" in
+		chat)
+			rm -f /etc/grommunio-admin-api/conf.d/chat.yaml
+			;;
+		office)
+			if pkg_installed grommunio-files && [ -x /usr/share/grommunio-files/occ ]; then
+				( cd /usr/share/grommunio-files && sudo -u grofiles ./occ -q -n app:disable onlyoffice ) >>"${LOGFILE}" 2>&1
+			fi
+			;;
+		archive)
+			archive_postfix_disable
+			;;
+	esac
+
+	for svc in $(role_services "${role}"); do
+		systemctl disable --now "${svc}" >>"${LOGFILE}" 2>&1
+	done
+
+	# Uninstall the role packages (databases and data directories are kept).
+	# shellcheck disable=SC2046
+	zypper --non-interactive remove -y $(role_packages "${role}") >>"${LOGFILE}" 2>&1
+
+	state_set "FT_${u}" false
+}

@@ -9,6 +9,13 @@
 : "${DIALOG_ITEM_HELP=4}"
 : "${DIALOG_ESC=255}"
 
+# Persistent setup state. Sourced on start and updated as the setup progresses so
+# that subsequent runs are idempotent (reuse of generated secrets, knowledge of
+# which roles are installed, etc.). Contains secrets, hence mode 0600 - this is
+# consistent with the existing setup logfile which already stores secrets.
+: "${STATE_FILE:=/etc/grommunio-common/setup-state.conf}"
+STATE_VERSION=1
+
 dialog_exit()
 {
 	case $1 in
@@ -74,9 +81,186 @@ setconf()
 	return 0
 }
 
+# Read back a "param = value" / "param=value" setting from a config file.
+getconf_val()
+{
+	local file="$1" param="$2"
+	[ -f "${file}" ] || return 1
+	sed -n -E "s/^[[:space:]]*${param}[[:space:]]*=[[:space:]]*//p" "${file}" | head -n1
+}
+
 randpw()
 {
 	< /dev/urandom tr -dc A-Za-z0-9 | head -c"${1:-16}"; echo;
+}
+
+# --- persistent state -------------------------------------------------------
+
+state_load()
+{
+	# shellcheck source=/dev/null
+	[ -f "${STATE_FILE}" ] && . "${STATE_FILE}"
+	return 0
+}
+
+# state_set KEY VALUE - persist a single key/value pair (overwriting an existing
+# entry) into the 0600 state file in a form safe to source back via bash.
+state_set()
+{
+	local key="$1"
+	shift
+	local val="$*"
+	local dir="${STATE_FILE%/*}"
+	[ -d "${dir}" ] || mkdir -p "${dir}"
+	if [ ! -e "${STATE_FILE}" ]; then
+		( umask 077; : >"${STATE_FILE}" )
+		printf '# grommunio-setup persistent state - contains secrets, keep mode 0600\n' >"${STATE_FILE}"
+		printf 'STATE_VERSION=%s\n' "${STATE_VERSION}" >>"${STATE_FILE}"
+	fi
+	local tmp
+	tmp=$(mktemp)
+	grep -v "^${key}=" "${STATE_FILE}" >"${tmp}" 2>/dev/null
+	printf '%s=%q\n' "${key}" "${val}" >>"${tmp}"
+	cat "${tmp}" >"${STATE_FILE}"
+	rm -f "${tmp}"
+}
+
+# state_save_var NAME - persist the current value of a variable by name.
+state_save_var()
+{
+	state_set "$1" "${!1}"
+}
+
+# --- distribution / platform detection --------------------------------------
+
+# Echo the openSUSE Leap point-release the grommunio package repository is keyed
+# on (e.g. 15.6, 16.0). On real openSUSE Leap / SLES installs VERSION_ID is
+# authoritative. The grommunio appliance reports ID=grommunio-lds with a
+# VERSION_ID that does not track the Leap base version, so there we derive it
+# from the openSUSE base product the appliance is built on.
+distlevel()
+{
+	(
+	local id="" version=""
+	if [ -f /etc/os-release ]; then
+		. /etc/os-release
+		id="${ID:-}"
+		version="${VERSION_ID:-}"
+	fi
+	case "${id}" in
+		opensuse-leap|opensuse*|sles|sle*)
+			if [[ "${version}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+				echo "${version}"
+				exit 0
+			fi
+			;;
+	esac
+	# Appliance (grommunio-lds) or any system without a usable Leap VERSION_ID:
+	# read the underlying openSUSE base product version.
+	local base
+	base=$(rpm -q --qf '%{VERSION}\n' openSUSE-release 2>/dev/null | head -n1)
+	if ! [[ "${base}" =~ ^[0-9]+\.[0-9]+$ ]] && [ -f /etc/products.d/baseproduct ]; then
+		base=$(sed -n -E 's:.*<version>([0-9]+\.[0-9]+).*</version>.*:\1:p' /etc/products.d/baseproduct | head -n1)
+	fi
+	if [[ "${base}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+		echo "${base}"
+		exit 0
+	fi
+	# Last resort: the current default appliance base.
+	echo "16.0"
+	)
+}
+
+# Major version of the running distribution (15 or 16), used to gate platform
+# differences such as redis vs. valkey.
+distmajor()
+{
+	distlevel | cut -d. -f1
+}
+
+# Echo the systemd unit for the gromox memcache backend. openSUSE Leap 16.0
+# replaced redis with valkey (which ships valkey@.service); Leap 15.x uses
+# redis@.service. Prefer whichever instance template is actually present.
+get_memcache_unit()
+{
+	if systemctl cat redis@grommunio.service >/dev/null 2>&1; then
+		echo "redis@grommunio.service"
+	elif systemctl cat valkey@grommunio.service >/dev/null 2>&1; then
+		echo "valkey@grommunio.service"
+	elif [ -e /usr/lib/systemd/system/valkey@.service ] || [ -e /etc/systemd/system/valkey@.service ]; then
+		echo "valkey@grommunio.service"
+	else
+		echo "redis@grommunio.service"
+	fi
+}
+
+# Echo the php-fpm config directory (e.g. /etc/php8). openSUSE keeps a
+# major-version path regardless of the minor version.
+get_php_fpm_dir()
+{
+	local d
+	for d in $(ls -d /etc/php*/fpm 2>/dev/null | sort -V -r); do
+		echo "${d%/fpm}"
+		return 0
+	done
+	return 1
+}
+
+# --- mysql helpers ----------------------------------------------------------
+
+# Run a SQL statement against the local server as the system (root/socket) user.
+local_mysql()
+{
+	mysql "$@"
+}
+
+# mysql_db_exists DB - is the named database present (local server)?
+mysql_db_exists()
+{
+	echo "use \`$1\`;" | mysql >/dev/null 2>&1
+}
+
+# mysql_table_exists DB TABLE - does the table exist (local server)?
+mysql_table_exists()
+{
+	local n
+	n=$(echo "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$1' AND table_name='$2';" | mysql -N 2>/dev/null)
+	[ "${n}" = "1" ]
+}
+
+# pkg_installed PKG - is the rpm installed?
+pkg_installed()
+{
+	rpm -q "$1" >/dev/null 2>&1
+}
+
+# --- role metadata ----------------------------------------------------------
+
+# All optional roles managed by the setup, in a stable order.
+ALL_ROLES="chat meet files office archive"
+
+# role_packages ROLE - the rpm packages to install/remove for a role.
+role_packages()
+{
+	case "$1" in
+		chat)    echo "grommunio-chat" ;;
+		meet)    echo "jitsi-jibri jitsi-jicofo jitsi-jigasi jitsi-videobridge jitsi-meet jitsi-meet-prosody-plugins jitsi-meet-branding-grommunio prosody" ;;
+		files)   echo "grommunio-files" ;;
+		office)  echo "grommunio-office rabbitmq-server" ;;
+		archive) echo "grommunio-archive sphinx" ;;
+	esac
+}
+
+# role_services ROLE - systemd units to stop/disable when removing a role.
+role_services()
+{
+	case "$1" in
+		chat)    echo "grommunio-chat.service" ;;
+		meet)    echo "prosody.service jitsi-videobridge.service jitsi-jicofo.service" ;;
+		files)   echo "grommunio-files-cron.timer grommunio-files-cron.service" ;;
+		office)  echo "ds-converter.service ds-docservice.service ds-themegen.service ds-fontgen.service rabbitmq-server.service" ;;
+		archive) echo "searchd.service grommunio-archive-smtp.service grommunio-archive.service" ;;
+	esac
 }
 
 setup_done()
@@ -89,7 +273,7 @@ grommunio Setup has successfully completed.
 You can now login to grommunio admin-web UI at https://${FQDN}:8443 with
 
   Username: admin
-  Password: ${ADMIN_PASS}
+  Password: ${ADMIN_PASS:-(unchanged from previous setup)}
 
 If you have created a Full CA Certificate during the process, you can download and install it from
 
@@ -116,24 +300,4 @@ progress()
 failonme()
 {
 	return "$1"
-}
-
-distlevel()
-{
-	(
-	if [ -f /etc/os-release ]; then
-		. /etc/os-release
-	else
-		echo "The file /etc/os-release was not found. The distribution cannot be identified."
-		exit 1
-	fi
-	case $ID in
-		opensuse*|sles)
-			echo "$VERSION_ID"
-			;;
-		grommunio-lds|*)
-			echo "15.6"
-			;;
-	esac
-	)
 }
