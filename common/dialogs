@@ -90,9 +90,47 @@ get_relayhost()
 	dialog_exit $?
 }
 
+CHOOSE_MODE_MSG="\
+grommunio Setup has already been run on this system.
+
+You can re-run the configuration at any time. This is safe: existing data,
+passwords and certificates are preserved. Use it to apply updates or to add
+or remove optional roles (the role list will reflect what is currently
+installed).
+
+Alternatively, you can reset everything and set the system up from scratch.
+This DELETES ALL DATA."
+
+# Sets SETUP_ACTION to "reconfigure" or "scratch".
+choose_setup_mode()
+{
+	writelog "Dialog: setup mode (already configured)"
+	SETUP_ACTION=$(dialog --no-mouse --colors --clear --cr-wrap \
+		--backtitle "grommunio Setup" \
+		--title "grommunio Setup: already configured" \
+		--ok-label "Select" \
+		--menu "${CHOOSE_MODE_MSG}" 0 0 0 \
+			"reconfigure" "Reconfigure / update and add or remove roles (keeps data)" \
+			"scratch"     "Reset EVERYTHING and set up from scratch (DESTRUCTIVE)" 3>&1 1>&2 2>&3)
+	dialog_exit $?
+}
+
 FEATURES_MSG="\
 Choose the features grommunio-setup should install and configure.
+
+Roles that are currently installed are pre-selected. Unticking a role removes
+it (its data is kept so it can be re-added later); ticking a new role adds it.
 "
+
+# checkbox state ("on"/"off") for a role, defaulting to its currently-installed
+# state (WAS_<ROLE>) so a reconfigure run reflects reality.
+feature_default()
+{
+	local u val
+	u=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+	eval "val=\${WAS_${u}:-false}"
+	if [ "${val}" = "true" ]; then echo on; else echo off; fi
+}
 
 get_features()
 {
@@ -102,33 +140,37 @@ get_features()
 		--ok-label "Submit" \
 		--checklist "${FEATURES_MSG}" 0 0 0 \
 			"core"    "mandatory" on  \
-			"chat"    "optional"  off \
-			"meet"    "optional"  off \
-			"files"   "optional"  off \
-			"office"  "optional"  off \
-			"archive" "optional"  off 2>"${TMPF}"
+			"chat"    "optional"  "$(feature_default chat)" \
+			"meet"    "optional"  "$(feature_default meet)" \
+			"files"   "optional"  "$(feature_default files)" \
+			"office"  "optional"  "$(feature_default office)" \
+			"archive" "optional"  "$(feature_default archive)" 2>"${TMPF}"
 	dialog_exit $?
-	for i in $(cat ${TMPF}) ; do
-                if [ "$i" == "chat" ] ; then
-			FT_PACKAGES="$FT_PACKAGES grommunio-${i}"
-			FT_CHAT="true"
-                fi
-                if [ "$i" == "meet" ] ; then
-			FT_PACKAGES="$FT_PACKAGES jitsi-jibri jitsi-jicofo jitsi-jigasi jitsi-videobridge jitsi-meet jitsi-meet-prosody-plugins jitsi-meet-branding-grommunio prosody"
-			FT_MEET="true"
-                fi
-                if [ "$i" == "files" ] ; then
-			FT_PACKAGES="$FT_PACKAGES grommunio-${i}"
-			FT_FILES="true"
-                fi
-                if [ "$i" == "office" ] ; then
-			FT_PACKAGES="$FT_PACKAGES grommunio-${i} rabbitmq-server"
-			FT_OFFICE="true"
-                fi
-                if [ "$i" == "archive" ] ; then
-			FT_PACKAGES="$FT_PACKAGES grommunio-${i} sphinx"
-			FT_ARCHIVE="true"
-                fi
+
+	FT_CHAT="false"
+	FT_MEET="false"
+	FT_FILES="false"
+	FT_OFFICE="false"
+	FT_ARCHIVE="false"
+	FT_PACKAGES=""
+	for i in $(cat "${TMPF}") ; do
+		case "$i" in
+			chat)    FT_CHAT="true" ;;
+			meet)    FT_MEET="true" ;;
+			files)   FT_FILES="true" ;;
+			office)  FT_OFFICE="true" ;;
+			archive) FT_ARCHIVE="true" ;;
+		esac
+	done
+	# Packages to install: those of every newly added or kept role. Already
+	# installed packages are a no-op for zypper.
+	local r u val
+	for r in ${ALL_ROLES} ; do
+		u=$(echo "$r" | tr '[:lower:]' '[:upper:]')
+		eval "val=\${FT_${u}}"
+		if [ "${val}" = "true" ] ; then
+			FT_PACKAGES="${FT_PACKAGES} $(role_packages "$r")"
+		fi
 	done
 }
 
@@ -137,7 +179,7 @@ set_chat_mysql_param()
 	writelog "Dialog: mysql configuration"
 	dialog --no-mouse --colors \
 		--backtitle "grommunio Setup" \
-		--title "MariaDB/MySQL chat database credentials - WARNING: Database is cleared!" \
+		--title "MariaDB/MySQL chat database credentials" \
 		--ok-label "Submit" \
 		--form "Enter the database credentials." 0 0 0 \
 			"Host:    " 1 1 "${CHAT_MYSQL_HOST}" 1 17 33 0 \
@@ -161,7 +203,7 @@ set_files_mysql_param()
 	writelog "Dialog: mysql configuration"
 	dialog --no-mouse --colors \
 		--backtitle "grommunio Setup" \
-		--title "MariaDB/MySQL files database credentials - WARNING: Database is cleared!" \
+		--title "MariaDB/MySQL files database credentials" \
 		--ok-label "Submit" \
 		--form "Enter the database credentials." 0 0 0 \
 			   "Host:    " 1 1 "${FILES_MYSQL_HOST}" 1 17 33 0 \
@@ -185,7 +227,7 @@ set_archive_mysql_param()
 	writelog "Dialog: mysql configuration"
 	dialog --no-mouse --colors \
 		--backtitle "grommunio Setup" \
-		--title "MariaDB/MySQL archive database credentials - WARNING: Database is cleared!" \
+		--title "MariaDB/MySQL archive database credentials" \
 		--ok-label "Submit" \
 		--form "Enter the database credentials." 0 0 0 \
 			   "Host:    " 1 1 "${ARCHIVE_MYSQL_HOST}" 1 17 33 0 \
@@ -209,7 +251,7 @@ set_office_mysql_param()
 	writelog "Dialog: mysql configuration"
 	dialog --no-mouse --colors \
 		--backtitle "grommunio Setup" \
-		--title "MariaDB/MySQL office database credentials - WARNING: Database is cleared!" \
+		--title "MariaDB/MySQL office database credentials" \
 		--ok-label "Submit" \
 		--form "Enter the database credentials." 0 0 0 \
 			   "Host:    " 1 1 "${OFFICE_MYSQL_HOST}" 1 17 33 0 \

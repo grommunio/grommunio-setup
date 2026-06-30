@@ -314,11 +314,15 @@ videobridge {
 }
 EOVBAPPCONF
 
-rm -rf /var/lib/prosody/*
-for i in auth avmoderation breakout conference conferenceduration focus guest internal.auth jitsi-videobridge lobby recorder speakerstats; do
-  echo | prosodyctl cert generate $i.${FQDN} >>"${LOGFILE}" 2>&1
-done
-echo | prosodyctl cert generate ${FQDN} >>"${LOGFILE}" 2>&1
+# Generate the prosody certificates only if they are not already present, so
+# re-running does not rotate certs and break already-connected clients.
+if [ ! -e "/var/lib/prosody/${FQDN}.crt" ]; then
+  rm -rf /var/lib/prosody/*
+  for i in auth avmoderation breakout conference conferenceduration focus guest internal.auth jitsi-videobridge lobby recorder speakerstats; do
+    echo | prosodyctl cert generate $i.${FQDN} >>"${LOGFILE}" 2>&1
+  done
+  echo | prosodyctl cert generate ${FQDN} >>"${LOGFILE}" 2>&1
+fi
 
 ln -sf /var/lib/prosody/auth.${FQDN}.crt /etc/pki/trust/anchors/auth.${FQDN}.crt
 update-ca-certificates --fresh

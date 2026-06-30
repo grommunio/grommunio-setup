@@ -5,6 +5,35 @@ An interactive setup script for grommunio.
 
 |shield-agpl|_ |shield-release|_ |shield-cov|_ |shield-loc|
 
+Usage
+=====
+
+Run ``setup.sh`` as root. It supports openSUSE Leap 15.6 and 16.0 (including the
+grommunio-lds appliance); the package repository is selected automatically from
+the underlying openSUSE base version.
+
+grommunio Setup is **safe to re-run**. On a system that was already set up it
+offers two choices:
+
+* **Reconfigure** (default) — re-applies the configuration idempotently. Existing
+  passwords, TLS certificates and data are preserved. Use it to apply updates or
+  to add/remove optional roles.
+* **Reset from scratch** — deletes all data and sets the system up anew (the
+  former behaviour; requires typing ``removealldata`` to confirm).
+
+Adding / removing roles
+-----------------------
+
+On a reconfigure run, the feature list (chat, meet, files, office, archive) is
+pre-selected to reflect what is currently installed. Tick a role to add it,
+untick a role to remove it. Removing a role stops and disables its services and
+uninstalls its packages, but **keeps its database and data** so it can be added
+back later (its credential/key configuration is preserved under
+``/etc/grommunio-common/setup-backup/``).
+
+Persistent state (including secrets) is stored mode ``0600`` in
+``/etc/grommunio-common/setup-state.conf``.
+
 .. |shield-agpl| image:: https://img.shields.io/badge/license-AGPL--3.0-green
 .. _shield-agpl: LICENSE.txt
 .. |shield-release| image:: https://shields.io/github/v/tag/grommunio/grommunio-setup

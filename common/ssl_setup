@@ -51,9 +51,9 @@ fullca()
 		echo "Certificate generation was not successful. Check "${LOGFILE}"."
 		return 1
 	fi
+	cp -f "/etc/grommunio-common/ssl/rootCA.crt" "/etc/pki/trust/anchors/" >>"${LOGFILE}" 2>&1
+	update-ca-certificates >>"${LOGFILE}" 2>&1
 	return 0
-	cp -f "${SSL_BUNDLE_T}" "/etc/pki/trust/anchors/"
-	update-ca-certificates
 }
 
 owncert()
@@ -102,7 +102,7 @@ letsencrypt()
 
 	[ -e "/etc/nginx/conf.d/grommunio.conf.grommunio-setup" ] && mv "/etc/nginx/conf.d/grommunio.conf.grommunio-setup" "/etc/nginx/conf.d/grommunio.conf"
 
-	cat "/etc/letsencrypt/live/${FQDN}/cert.pem" "/etc/letsencrypt/live/${FQDN}/fullchain.pem" > "${SSL_BUNDLE_T}"
+	cat "/etc/letsencrypt/live/${FQDN}/fullchain.pem" > "${SSL_BUNDLE_T}"
 	cp -f "/etc/letsencrypt/live/${FQDN}/privkey.pem" "${SSL_KEY_T}"
 
 	{
