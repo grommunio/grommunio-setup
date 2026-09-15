@@ -10,7 +10,7 @@ setup_repo() {
 		writelog "No valid subscription credentials provided"
 		REPO_PATH="community"
 	else
-		writelog "Subscription credentials provided: ${REPO_USER}:${REPO_PASS}"
+		writelog "Subscription credentials provided for user ${REPO_USER}"
 		REPO_PATH="supported"
 		curl -Lsk -u "$REPO_USER:$REPO_PASS" "https://download.grommunio.com/RPM-GPG-KEY-grommunio" >/tmp/RPM-GPG-KEY-grommunio
 		RETCMD=$?
@@ -21,6 +21,8 @@ setup_repo() {
 	fi
 	# zypp is abusing query parameters, https://github.com/openSUSE/libzypp/issues/301
 	if [ "${REPO_PATH}" = "supported" ]; then
+		mkdir -p /etc/zypp/repos.d
+		mkcredfile 0600 "" /etc/zypp/repos.d/grommunio.repo
 		cat >/etc/zypp/repos.d/grommunio.repo <<EOF
 [grommunio]
 enabled=1

@@ -142,7 +142,7 @@ setup_role_chat()
 	sed -i 's|"SiteURL": "",|"SiteURL": "https://'"${FQDN}"'/chat",|g' "${CHAT_CONFIG}"
 	touch "/var/log/grommunio-chat/mattermost.log"
 	chown -R grochat:grochat "/etc/grommunio-chat/" "/usr/share/grommunio-chat/logs" "/usr/share/grommunio-chat/config" "/var/log/grommunio-chat" "/var/lib/grommunio-chat/"
-	chmod 644 "${CHAT_CONFIG}"
+	chmod 640 "${CHAT_CONFIG}"
 	systemctl enable grommunio-chat >>"${LOGFILE}" 2>&1
 	systemctl restart grommunio-chat >>"${LOGFILE}" 2>&1
 	dialog_chat_adminpass
@@ -161,6 +161,7 @@ setup_role_chat()
 		MMCTL_LOCAL_SOCKET_PATH=/var/tmp/grommunio-chat_local.socket bin/grommunio-chat-ctl --local user create --email admin@localhost --username admin --password "${CHAT_ADMIN_PASS}" --system-admin >>"${LOGFILE}" 2>&1
 	popd || return
 
+mkcredfile 0640 grommunio /etc/grommunio-admin-api/conf.d/chat.yaml
 cat > /etc/grommunio-admin-api/conf.d/chat.yaml <<EOCHAT
 chat:
   connection:
@@ -504,6 +505,7 @@ setup_role_archive()
 		sed -e "s#grommunioArchiveAdmin#${ARCHIVE_ADMIN_PASS}#g" -e "s#grommunioArchiveAuditor#${ARCHIVE_AUDIT_PASS}#g" /usr/share/grommunio-archive/db-mysql.sql | mysql -h"${ARCHIVE_MYSQL_HOST}" -u"${ARCHIVE_MYSQL_USER}" -p"${ARCHIVE_MYSQL_PASS}" "${ARCHIVE_MYSQL_DB}"
 	fi
 
+	mkcredfile 0640 groarchive /etc/grommunio-archive/config-site.php
 	sed -e "s#MYHOSTNAME#${FQDN}#g" -e "s#MYSMTP#${DOMAIN}#g" -e "s/MYSQL_HOSTNAME/${ARCHIVE_MYSQL_HOST}/" -e "s/MYSQL_DATABASE/${ARCHIVE_MYSQL_DB}/" -e "s/MYSQL_PASSWORD/${ARCHIVE_MYSQL_PASS}/" -e "s/MYSQL_USERNAME/${ARCHIVE_MYSQL_USER}/" /etc/grommunio-archive/config-site.dist.php > /etc/grommunio-archive/config-site.php
 	# config-site.php carries the archive DB password - restrict to groarchive.
 	chgrp groarchive /etc/grommunio-archive/config-site.php
@@ -518,6 +520,7 @@ setup_role_archive()
 	setconf /etc/grommunio-archive/grommunio-archive.conf listen_addr 0.0.0.0 0
 	setconf /etc/grommunio-archive/grommunio-archive.conf storedir /var/lib/grommunio-archive/store
 
+	mkcredfile 0640 sphinx /etc/sphinx/sphinx.conf
 	php /etc/grommunio-archive/sphinx.conf.dist > /etc/sphinx/sphinx.conf
 	sed -i -e "s/MYSQL_HOSTNAME/${ARCHIVE_MYSQL_HOST}/" -e "s/MYSQL_DATABASE/${ARCHIVE_MYSQL_DB}/" -e "s/MYSQL_PASSWORD/${ARCHIVE_MYSQL_PASS}/" -e "s/MYSQL_USERNAME/${ARCHIVE_MYSQL_USER}/" /etc/sphinx/sphinx.conf
 	chown groarchive:sphinx /etc/sphinx/sphinx.conf
@@ -529,6 +532,7 @@ setup_role_archive()
 	sudo -u groarchive indexer --all
 
 	if [ ! -s /etc/grommunio-archive/grommunio-archive.key ]; then
+		mkcredfile 0640 groarchive /etc/grommunio-archive/grommunio-archive.key
 		< /dev/urandom head -c 56 > /etc/grommunio-archive/grommunio-archive.key
 	fi
 	# The archive encryption key must not be world-readable.
