@@ -4,13 +4,37 @@
 
 LOGFILE=${LOGFILE:-/var/log/grommunio-setup-meet.log}
 
-if [ -e /etc/machine-id ]; then
-        CPUID="`cat /etc/machine-id`"
-else
-        CPUID="`ip a | grep -i link/ether | sha256sum | awk '{ print $1 }'`"
+# Usable both sourced from grommunio-setup and standalone.
+if ! declare -F randpw >/dev/null 2>&1 ; then
+        _MEET_DATADIR="${DATADIR:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
+        # shellcheck source=../common/helpers
+        . "${_MEET_DATADIR}/common/helpers"
+        state_load
 fi
 
+# Kept in the 0600 setup state so re-runs reuse them instead of rotating the
+# configs out of sync with the registered prosody accounts.
+[ -n "${MEET_COMPONENT_SECRET}" ] || MEET_COMPONENT_SECRET=$(randpw 32)
+[ -n "${MEET_FOCUS_PASS}" ] || MEET_FOCUS_PASS=$(randpw 32)
+[ -n "${MEET_JVB_PASS}" ] || MEET_JVB_PASS=$(randpw 32)
+state_set MEET_COMPONENT_SECRET "${MEET_COMPONENT_SECRET}"
+state_set MEET_FOCUS_PASS "${MEET_FOCUS_PASS}"
+state_set MEET_JVB_PASS "${MEET_JVB_PASS}"
+
 MUC_NICK=$(uuidgen)
+
+# meet_register USER PASSWORD - prosodyctl register refuses an existing account,
+# so recreate it rather than leave the password out of sync with the configs.
+meet_register()
+{
+        local user="$1" pass="$2"
+        if prosodyctl register "${user}" "auth.${FQDN}" "${pass}" >>"${LOGFILE}" 2>&1 ; then
+                return 0
+        fi
+        prosodyctl unregister "${user}" "auth.${FQDN}" >>"${LOGFILE}" 2>&1 </dev/null ||
+                prosodyctl deluser "${user}@auth.${FQDN}" >>"${LOGFILE}" 2>&1 </dev/null
+        prosodyctl register "${user}" "auth.${FQDN}" "${pass}" >>"${LOGFILE}" 2>&1
+}
 
 systemctl is-active --quiet prosody && systemctl stop prosody
 systemctl is-active --quiet jitsi-videobridge && systemctl stop jitsi-videobridge
@@ -67,6 +91,7 @@ VirtualHost "localhost"
 Include 'conf.d/*.cfg.lua'
 EOPROSODYMAIN
 
+mkcredfile 0640 prosody "/etc/prosody/conf.d/${FQDN}.cfg.lua"
 cat > /etc/prosody/conf.d/${FQDN}.cfg.lua <<EOPROSODYHOST
 plugin_paths = { "/usr/share/jitsi/meet/prosody-plugins/" }
 muc_mapper_domain_base = "${FQDN}";
@@ -185,7 +210,7 @@ Component "avmoderation.${FQDN}" "av_moderation_component"
 
 
 Component "jitsi-videobridge.${FQDN}"
-        component_secret = "${CPUID}";
+        component_secret = "${MEET_COMPONENT_SECRET}";
 
 VirtualHost "recorder.${FQDN}"
         modules_enabled = {
@@ -249,12 +274,13 @@ var config = {
 };
 EOCONFIGJS
 
+mkcredfile 0640 jicofo,jitsi /etc/jitsi/jicofo/jitsi-jicofo.conf
 cat > /etc/jitsi/jicofo/jitsi-jicofo.conf <<EOJICOFOCONF
 JICOFO_HOST=localhost
 JICOFO_HOSTNAME=${FQDN}
 JICOFO_AUTH_DOMAIN=auth.${FQDN}
 JICOFO_AUTH_USER=focus
-JICOFO_AUTH_PASSWORD=${CPUID}
+JICOFO_AUTH_PASSWORD=${MEET_FOCUS_PASS}
 JICOFO_OPTS=""
 JAVA_SYS_PROPS="-Xmx3072m\
  -Dnet.java.sip.communicator.SC_HOME_DIR_LOCATION=/etc/jitsi\
@@ -269,6 +295,7 @@ org.jitsi.jicofo.SHORT_ID=55555
 org.jitsi.jicofo.ALWAYS_TRUST_MODE_ENABLED=true
 EOJICOFOSIP
 
+mkcredfile 0640 jvb,jitsi /etc/jitsi/videobridge/application.conf
 cat > /etc/jitsi/videobridge/application.conf <<EOVBAPPCONF
 stats {
   # Enable broadcasting stats/presence in a MUC
@@ -285,8 +312,8 @@ apis {
       xmpp-server-1 {
         hostname="${FQDN}"
         domain = "auth.${FQDN}"
-        username = "focus"
-        password = "${CPUID}"
+        username = "jvb"
+        password = "${MEET_JVB_PASS}"
         muc_jids = "JvbBrewery@internal.auth.${FQDN}"
         muc_nickname = "${MUC_NICK}"
         disable_certificate_verification = true
@@ -326,8 +353,8 @@ fi
 
 ln -sf /var/lib/prosody/auth.${FQDN}.crt /etc/pki/trust/anchors/auth.${FQDN}.crt
 update-ca-certificates --fresh
-prosodyctl register focus auth.${FQDN} ${CPUID}
-prosodyctl register jvb auth.${FQDN} ${CPUID}
+meet_register focus "${MEET_FOCUS_PASS}"
+meet_register jvb "${MEET_JVB_PASS}"
 prosodyctl mod_roster_command subscribe focus.${FQDN} focus@auth.${FQDN}
 
 firewall-cmd --add-port=10000/udp --zone=public --permanent
