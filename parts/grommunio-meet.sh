@@ -218,15 +218,6 @@ VirtualHost "recorder.${FQDN}"
         }
         authentication = "internal_plain"
 
-Component "lobby.${FQDN}" "muc"
-        storage = "memory"
-        restrict_room_creation = true
-        muc_room_locking = false
-        muc_room_default_public_jids = true
-        modules_enabled = {
-            "muc_rate_limit";
-        }
-
 VirtualHost "guest.${FQDN}"
         authentication = "anonymous"
         c2s_require_encryption = false
