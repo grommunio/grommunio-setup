@@ -74,22 +74,6 @@ dialog_adminpass()
 	fi
 }
 
-RELAYHOST_MSG="\
-Setting a relayhost is necessary if your grommunio server is not able to directly send emails over the internet.
-
-Make sure the relayhost allows relaying for this host. You can add DNS names or IP adresses.
-To ensure no MX DNS lookups are issued, enclose the relayhost in square brackets, like \"[mail.isp.com]\".
-"
-get_relayhost()
-{
-	writelog "Dialog: Postfix relayhost"
-	dialog --no-mouse --clear --colors --cr-wrap \
-		--backtitle "grommunio Setup" \
-		--title "Postfix relayhost" \
-		--inputbox "${RELAYHOST_MSG}" 0 0 "" 3>&1 1>&2 2>&3
-	dialog_exit $?
-}
-
 CHOOSE_MODE_MSG="\
 grommunio Setup has already been run on this system.
 

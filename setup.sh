@@ -156,7 +156,6 @@ load_core_from_system()
 	[ -z "${X500}" ] && X500=$(getconf_val /etc/gromox/midb.cfg x500_org_name)
 	[ -z "${FQDN}" ] && FQDN=$(hostname -f)
 	[ -z "${DOMAIN}" ] && DOMAIN=$(hostname -d)
-	[ -z "${RELAYHOST}" ] && RELAYHOST=$(postconf -h relayhost 2>/dev/null)
 	FQDN="${FQDN,,}"
 	DOMAIN="${DOMAIN,,}"
 }
@@ -343,9 +342,6 @@ Example: example.com" 0 0 "${DFL}" 3>&1 1>&2 2>&3
     DOMAIN=${ORIGDOMAIN,,}
   done
   writelog "Configured mail domain: ${DOMAIN}"
-
-  RELAYHOST=$(get_relayhost)
-  writelog "Got relayhost: ${RELAYHOST}"
 
   X500="i$(printf "%llx" "$(date +%s)")"
 fi
@@ -701,6 +697,76 @@ dbname = ${MYSQL_DB}
 query = SELECT destination FROM forwards WHERE username=_utf8mb4'%s' COLLATE utf8mb4_general_ci AND forward_type = 0
 EOF
 
+# Per-domain SMTP gateway (smart-host) maps; see doc/mta-smart-hosts.rst in gromox
+cat > /etc/postfix/grommunio-domain-gateway-transport.cf <<EOF
+user = ${MYSQL_USER}
+password = ${MYSQL_PASS}
+hosts = ${MYSQL_HOST}
+dbname = ${MYSQL_DB}
+query = SELECT CONCAT(CASE g.encryption WHEN 'tls' THEN 'gwdsgw_ssl' WHEN 'none' THEN 'smtp' ELSE 'gwdsgw_starttls' END, ':[', g.host, ']:', g.port) FROM domain_smtp_gateway g JOIN domains d ON d.ID = g.domain_id WHERE d.domain_status = 0 AND d.domainname = _utf8mb4'%d' COLLATE utf8mb4_general_ci AND g.enabled = 1
+EOF
+
+cat > /etc/postfix/grommunio-domain-gateway-auth.cf <<EOF
+user = ${MYSQL_USER}
+password = ${MYSQL_PASS}
+hosts = ${MYSQL_HOST}
+dbname = ${MYSQL_DB}
+query = SELECT CONCAT_WS(':', g.username, g.password) FROM domain_smtp_gateway g JOIN domains d ON d.ID = g.domain_id WHERE d.domain_status = 0 AND d.domainname = _utf8mb4'%d' COLLATE utf8mb4_general_ci AND g.enabled = 1 AND g.username IS NOT NULL AND g.username <> ''
+EOF
+
+# Relay certificate verification: Postfix looks smtp_tls_policy_maps up by
+# nexthop ("[host]:port"), while the table stores the bare host, hence the
+# SUBSTRING_INDEX normalization. Hosts used by any domain with encryption
+# 'starttls' or 'tls' are pinned to the "secure" level; hosts only used
+# with 'starttls_unverified' have no entry and stay at "encrypt".
+# See doc/mta-smart-hosts.rst in gromox.
+cat > /etc/postfix/grommunio-domain-gateway-tls-policy.cf <<EOF
+user = ${MYSQL_USER}
+password = ${MYSQL_PASS}
+hosts = ${MYSQL_HOST}
+dbname = ${MYSQL_DB}
+query = SELECT CONCAT('secure match=', g.host) FROM domain_smtp_gateway g JOIN domains d ON d.ID = g.domain_id WHERE d.domain_status = 0 AND g.enabled = 1 AND g.encryption IN ('starttls', 'tls') AND g.host = SUBSTRING_INDEX(SUBSTRING_INDEX('%s', ']', 1), '[', -1) LIMIT 1
+EOF
+
+# TLS transports for the gateway encryption modes (idempotent)
+grep -q '^gwdsgw_starttls' /etc/postfix/master.cf || cat >> /etc/postfix/master.cf <<'MCEOF'
+
+# Per-domain SMTP gateway transports (grommunio domain_smtp_gateway)
+gwdsgw_starttls unix -       -       n       -       -       smtp
+  -o smtp_tls_security_level=encrypt
+gwdsgw_ssl     unix -       -       n       -       -       smtp
+  -o smtp_tls_wrappermode=yes
+  -o smtp_tls_security_level=encrypt
+MCEOF
+
+# Sender-dependent smart-host routing; domains without a gateway row
+# keep using the global relayhost.
+postconf -e sender_dependent_default_transport_maps="mysql:/etc/postfix/grommunio-domain-gateway-transport.cf"
+# The Postfix SMTP client must be told to offer AUTH at all
+postconf -e smtp_sasl_auth_enable=yes
+# Without this, smtp_sasl_password_maps is only searched by nexthop,
+# never by sender -- the sender-dependent gateway credentials would
+# never be found and relays would reject with "Relay access denied".
+postconf -e smtp_sender_dependent_authentication=yes
+# Append gateway AUTH map to any existing smtp_sasl_password_maps (idempotent)
+SASL_MAPS=$(postconf -h smtp_sasl_password_maps)
+case ",${SASL_MAPS}," in
+  *grommunio-domain-gateway-auth*) ;;
+  *) postconf -e "smtp_sasl_password_maps=${SASL_MAPS:+${SASL_MAPS},}mysql:/etc/postfix/grommunio-domain-gateway-auth.cf" ;;
+esac
+
+# Append gateway TLS policy map to any existing smtp_tls_policy_maps (idempotent)
+POLICY_MAPS=$(postconf -h smtp_tls_policy_maps)
+case ",${POLICY_MAPS}," in
+  *grommunio-domain-gateway-tls-policy*) ;;
+  *) postconf -e "smtp_tls_policy_maps=${POLICY_MAPS:+${POLICY_MAPS},}mysql:/etc/postfix/grommunio-domain-gateway-tls-policy.cf" ;;
+esac
+# The "secure" level requires trust anchors; use the distribution CA bundle
+# unless the admin configured one already.
+if [ -z "$(postconf -h smtp_tls_CAfile 2>/dev/null)" ] && [ -f /etc/ssl/ca-bundle.pem ] ; then
+  postconf -e smtp_tls_CAfile=/etc/ssl/ca-bundle.pem
+fi
+
 postconf -e \
   myhostname="${FQDN}" \
   virtual_mailbox_domains="mysql:/etc/postfix/grommunio-virtual-mailbox-domains.cf" \
@@ -709,7 +775,6 @@ postconf -e \
   recipient_bcc_maps="mysql:/etc/postfix/grommunio-bcc-forwards.cf" \
   unverified_recipient_reject_code=550 \
   virtual_transport="smtp:[::1]:24" \
-  relayhost="${RELAYHOST}" \
   inet_interfaces=all \
   smtpd_helo_restrictions=permit_mynetworks,permit_sasl_authenticated,reject_invalid_hostname,reject_non_fqdn_hostname \
   smtpd_sender_restrictions=reject_non_fqdn_sender,permit_sasl_authenticated,permit_mynetworks \
@@ -722,7 +787,6 @@ postconf -e \
   smtpd_tls_key_file="${SSL_KEY_T}" \
   smtpd_tls_received_header=yes \
   smtpd_tls_session_cache_timeout=3600s \
-  smtpd_use_tls=yes \
   tls_random_source=dev:/dev/urandom \
   smtpd_sasl_auth_enable=yes \
   broken_sasl_auth_clients=yes \
@@ -731,9 +795,17 @@ postconf -e \
   smtpd_milters=inet:localhost:11332 \
   milter_default_action=accept \
   smtp_tls_security_level=may \
-  smtp_use_tls=yes \
   milter_protocol=6
 postconf -M tlsmgr/unix="tlsmgr unix - - n 1000? 1 tlsmgr"
+
+# Outbound relaying is per-domain now (domain_smtp_gateway table, managed
+# through grommunio admin). Remove any static global relayhost left over
+# from older setups so that routing is exclusively per-domain; domains
+# without a gateway row deliver directly.
+if [ -n "$(postconf -h relayhost 2>/dev/null)" ] ; then
+  writelog "Removing static relayhost (per-domain gateways are managed via grommunio admin)"
+fi
+postconf -e relayhost=
 postconf -M submission/inet="submission inet n - n - - smtpd"
 postconf -P submission/inet/syslog_name="postfix/submission"
 postconf -P submission/inet/smtpd_tls_security_level=encrypt
@@ -808,7 +880,6 @@ systemctl restart grommunio-admin-api.service
 state_set FQDN "${FQDN}"
 state_set DOMAIN "${DOMAIN}"
 state_set X500 "${X500}"
-state_set RELAYHOST "${RELAYHOST}"
 state_set MYSQL_HOST "${MYSQL_HOST}"
 state_set MYSQL_USER "${MYSQL_USER}"
 state_set MYSQL_PASS "${MYSQL_PASS}"
