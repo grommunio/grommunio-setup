@@ -809,6 +809,15 @@ build_config_json
 systemctl restart grommunio-admin-api.service
 
 # ---------------------------------------------------------------------------
+# Hand freshly added roles to grommunio-auth so they get their OIDC client.
+# ---------------------------------------------------------------------------
+if [ -s /etc/grommunio-auth/grommunio-auth.conf ] && \
+   [ -x /usr/share/grommunio-auth/setup-grommunio-auth-clients.sh ] ; then
+  writelog "Config stage: grommunio-auth client setup"
+  /usr/share/grommunio-auth/setup-grommunio-auth-clients.sh -q >>"${LOGFILE}" 2>&1 || :
+fi
+
+# ---------------------------------------------------------------------------
 # Persist state for idempotent future runs.
 # ---------------------------------------------------------------------------
 state_set FQDN "${FQDN}"
