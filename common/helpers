@@ -94,6 +94,47 @@ randpw()
 	< /dev/urandom tr -dc A-Za-z0-9 | head -c"${1:-16}"; echo;
 }
 
+# _credgroup GROUP[,GROUP...] DIR - first candidate group present on the system,
+# else the group of DIR.
+_credgroup()
+{
+	local groups="$1" dir="$2" g
+	for g in ${groups//,/ } ; do
+		if getent group "${g}" >/dev/null 2>&1 ; then
+			echo "${g}"
+			return 0
+		fi
+	done
+	stat -c %G "${dir}" 2>/dev/null
+}
+
+# hardenfile MODE GROUP[,GROUP...] FILE... - restrict credential files, skipping
+# the ones that do not exist.
+hardenfile()
+{
+	local mode="$1" groups="$2" f grp
+	shift 2
+	for f in "$@" ; do
+		[ -e "${f}" ] || continue
+		grp=$(_credgroup "${groups}" "${f%/*}")
+		if [ -n "${grp}" ] && [ "${grp}" != "UNKNOWN" ] ; then
+			chgrp "${grp}" "${f}" 2>/dev/null
+		fi
+		chmod "${mode}" "${f}" 2>/dev/null
+	done
+}
+
+# mkcredfile MODE GROUP[,GROUP...] FILE - create FILE restricted before its
+# contents are written; a later ">" truncates in place and keeps the mode.
+mkcredfile()
+{
+	local mode="$1" groups="$2" file="$3" dir
+	dir="${file%/*}"
+	[ -d "${dir}" ] || mkdir -p "${dir}"
+	( umask 077; : >"${file}" )
+	hardenfile "${mode}" "${groups}" "${file}"
+}
+
 # --- persistent state -------------------------------------------------------
 
 state_load()
