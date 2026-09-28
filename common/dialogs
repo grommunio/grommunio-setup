@@ -397,3 +397,71 @@ dialog_archive_auditpass() {
   fi
 
 }
+
+DKIM_REDIS_PASS_MSG="\
+Connection settings for the dedicated DKIM keystore (Redis instance
+redis@dkim).
+
+grommunio-admin-api and grommunio-antispam use these settings to access
+the DKIM keys. The keystore always requires a user name and password.
+Leave the suggested values unchanged unless you have specific
+requirements."
+
+get_dkim_redis_pass()
+{
+	local in_host in_port in_user in_pass
+	while true ; do
+		in_host=${in_host:-${DKIM_REDIS_HOST:-127.0.0.1}}
+		in_port=${in_port:-${DKIM_REDIS_PORT:-6380}}
+		in_user=${in_user:-${DKIM_REDIS_USER:-dkim}}
+		in_pass=${in_pass:-$(randpw 32)}
+		writelog "Dialog: DKIM keystore credentials"
+		dialog --no-mouse --clear --colors --backtitle "grommunio Setup" --title "DKIM keystore credentials" --ok-label "Submit" \
+		       --form "Enter the DKIM keystore connection settings." 0 0 0   \
+		       "Host:     " 1 1 "${in_host}" 1 17 45 0 \
+		       "Port:     " 2 1 "${in_port}" 2 17 45 0 \
+		       "User:     " 3 1 "${in_user}" 3 17 45 0 \
+		       "Password:" 4 1 "${in_pass}" 4 17 45 0 2>"${TMPF}"
+		dialog_exit $?
+		in_host=$(sed -n '1{p;q}' "${TMPF}")
+		in_port=$(sed -n '2{p;q}' "${TMPF}")
+		in_user=$(sed -n '3{p;q}' "${TMPF}")
+		in_pass=$(sed -n '4{p;q}' "${TMPF}")
+		if [ -z "${in_host}" ] || [ -z "${in_port}" ] || [ -z "${in_user}" ] || [ -z "${in_pass}" ] ; then
+			dialog --no-mouse --clear --colors --backtitle "grommunio Setup" --title "DKIM keystore credentials" \
+				--msgbox 'No field must be empty. Re-enter the connection settings.' 0 0
+			dialog_exit $?
+			continue
+		fi
+		if ! printf '%s' "${in_port}" | grep -qE '^[0-9]+$' || [ "${in_port}" -lt 1 ] || [ "${in_port}" -gt 65535 ] ; then
+			dialog --no-mouse --clear --colors --backtitle "grommunio Setup" --title "DKIM keystore credentials" \
+				--msgbox 'The port must be a number between 1 and 65535. Re-enter the connection settings.' 0 0
+			dialog_exit $?
+			continue
+		fi
+		if printf '%s' "${in_host}" | grep -q '[^A-Za-z0-9._-]' ; then
+			dialog --no-mouse --clear --colors --backtitle "grommunio Setup" --title "DKIM keystore credentials" \
+				--msgbox 'The host contains characters that cannot be used here (colons, spaces or special characters). Enter an IP address or host name without protocol or port.' 0 0
+			dialog_exit $?
+			continue
+		fi
+		if printf '%s' "${in_user}" | grep -q '[^A-Za-z0-9_.-]' ; then
+			dialog --no-mouse --clear --colors --backtitle "grommunio Setup" --title "DKIM keystore credentials" \
+				--msgbox 'The user name contains characters that cannot be used here (quotes, spaces or special characters). Please choose a different user name.' 0 0
+			dialog_exit $?
+			continue
+		fi
+		if printf '%s' "${in_pass}" | grep -q '[^A-Za-z0-9_.@#%^+=:/-]' ; then
+			dialog --no-mouse --clear --colors --backtitle "grommunio Setup" --title "DKIM keystore credentials" \
+				--msgbox 'The password contains characters that cannot be used here (quotes, spaces, dollar signs or backslashes). Please choose a different password.' 0 0
+			dialog_exit $?
+			continue
+		fi
+		DKIM_REDIS_HOST=${in_host}
+		DKIM_REDIS_PORT=${in_port}
+		DKIM_REDIS_USER=${in_user}
+		DKIM_REDIS_PASS=${in_pass}
+		writelog "DKIM keystore connection set (${DKIM_REDIS_HOST}:${DKIM_REDIS_PORT}, user: ${DKIM_REDIS_USER})"
+		break
+	done
+}
