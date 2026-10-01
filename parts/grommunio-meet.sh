@@ -1,7 +1,5 @@
 #!/bin/bash
 
-[ -z "${FQDN}" ] && FQDN=$(hostname -f)
-
 LOGFILE=${LOGFILE:-/var/log/grommunio-setup-meet.log}
 
 # Usable both sourced from grommunio-setup and standalone.
@@ -11,6 +9,8 @@ if ! declare -F randpw >/dev/null 2>&1 ; then
         . "${_MEET_DATADIR}/common/helpers"
         state_load
 fi
+
+[ -z "${FQDN}" ] && FQDN=$(system_fqdn)
 
 # Kept in the 0600 setup state so re-runs reuse them instead of rotating the
 # configs out of sync with the registered prosody accounts.
@@ -265,7 +265,7 @@ var config = {
 };
 EOCONFIGJS
 
-mkcredfile 0640 jicofo,jitsi /etc/jitsi/jicofo/jitsi-jicofo.conf
+mkcredfile 0640 jitsi /etc/jitsi/jicofo/jitsi-jicofo.conf
 cat > /etc/jitsi/jicofo/jitsi-jicofo.conf <<EOJICOFOCONF
 JICOFO_HOST=localhost
 JICOFO_HOSTNAME=${FQDN}
@@ -286,7 +286,7 @@ org.jitsi.jicofo.SHORT_ID=55555
 org.jitsi.jicofo.ALWAYS_TRUST_MODE_ENABLED=true
 EOJICOFOSIP
 
-mkcredfile 0640 jvb,jitsi /etc/jitsi/videobridge/application.conf
+mkcredfile 0640 jitsi /etc/jitsi/videobridge/application.conf
 cat > /etc/jitsi/videobridge/application.conf <<EOVBAPPCONF
 stats {
   # Enable broadcasting stats/presence in a MUC

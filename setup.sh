@@ -154,8 +154,8 @@ load_core_from_system()
 	v=$(getconf_val /etc/gromox/http.cfg default_domain)  ; [ -n "${v}" ] && DOMAIN="${v}"
 	v=$(getconf_val /etc/gromox/autodiscover.cfg x500_org_name) ; [ -n "${v}" ] && X500="${v}"
 	[ -z "${X500}" ] && X500=$(getconf_val /etc/gromox/midb.cfg x500_org_name)
-	[ -z "${FQDN}" ] && FQDN=$(hostname -f)
-	[ -z "${DOMAIN}" ] && DOMAIN=$(hostname -d)
+	[ -z "${FQDN}" ] && FQDN=$(system_fqdn)
+	[ -z "${DOMAIN}" ] && DOMAIN=$(fqdn_domain "${FQDN}")
 	[ -z "${RELAYHOST}" ] && RELAYHOST=$(postconf -h relayhost 2>/dev/null)
 	FQDN="${FQDN,,}"
 	DOMAIN="${DOMAIN,,}"
@@ -303,7 +303,7 @@ else
 
 Example: grommunio.example.com
 
-This name will be part of the certificates later generated. / This name will have to be present in imported certificates." 0 0 "$(hostname -f)" 3>&1 1>&2 2>&3
+This name will be part of generated certificates, and must be present in imported certificates." 0 0 "$(system_fqdn)" 3>&1 1>&2 2>&3
     dialog_exit $?
 
   }
@@ -320,10 +320,7 @@ This name will be part of the certificates later generated. / This name will hav
 
   set_maildomain(){
 
-    DFL=$(hostname -d)
-    if [ -z "${DFL}" ]; then
-      DFL="${FQDN}"
-    fi
+    DFL=$(fqdn_domain "${FQDN}")
     writelog "Dialog: mail domain"
     dialog --no-mouse --clear --colors --backtitle "grommunio Setup" --title "Mail domain" --cr-wrap --inputbox \
 "Tell us the default mail domain this system serves up. This is used, for example, for Non-Delivery Reports and for generation of some simple TLS certificates. Specify ONLY ONE domain here.
@@ -443,7 +440,7 @@ Example: ${SSL_EMAIL}" 0 0 "${SSL_EMAIL}" 3>&1 1>&2 2>&3
                --checklist "Choose the Let's Encrypt certificates to request.\nBy requesting certificates from Let's Encrypt, you agree to the terms of service at ${LE_TERMS_URL}.\nThe DNS records should be set accordingly before proceeding."  0 0  0 \
                "${DOMAIN}"              "recommended" on  \
                "${FQDN}"                "recommended" on  \
-               "autodiscover.${DOMAIN}" "recommended" off 2>"${TMPF}"
+               "autodiscover.${DOMAIN}" "recommended" on  2>"${TMPF}"
       else
         dialog --no-mouse --colors --backtitle "grommunio Setup" --title "TLS certificate (Let's Encrypt)" --ok-label "Submit" \
                --checklist "Choose the Let's Encrypt certificates to request.\nBy requesting certificates from Let's Encrypt, you agree to the terms of service at ${LE_TERMS_URL}.\nThe DNS records should be set accordingly before proceeding."  0 0  0 \
@@ -856,14 +853,31 @@ harden_credential_files()
   hardenfile 0600 "" /etc/zypp/repos.d/grommunio.repo
   hardenfile 0640 grochat /etc/grommunio-chat/config.json
   hardenfile 0640 prosody "/etc/prosody/conf.d/${FQDN}.cfg.lua"
-  hardenfile 0640 jicofo,jitsi /etc/jitsi/jicofo/jitsi-jicofo.conf
-  hardenfile 0640 jvb,jitsi /etc/jitsi/videobridge/application.conf
+  # jicofo and jvb run with Group=jitsi; their own user groups are not active
+  hardenfile 0640 jitsi /etc/jitsi/jicofo/jitsi-jicofo.conf
+  hardenfile 0640 jitsi /etc/jitsi/videobridge/application.conf
   hardenfile 0640 groarchive /etc/grommunio-archive/config-site.php \
                              /etc/grommunio-archive/grommunio-archive.conf \
                              /etc/grommunio-archive/grommunio-archive.key
   hardenfile 0640 sphinx /etc/sphinx/sphinx.conf
 }
+JVB_CONF_GROUP=$(stat -c %G /etc/jitsi/videobridge/application.conf 2>/dev/null)
 harden_credential_files
+
+# Services restarted above may have given up on a file that was only made
+# readable just now; bring them back.
+{
+  for u in grommunio-antispam postfix prosody jitsi-jicofo jitsi-videobridge grommunio-chat ; do
+    if systemctl -q is-failed "${u}.service" ; then
+      systemctl reset-failed "${u}.service"
+      systemctl restart "${u}.service"
+    fi
+  done
+  # jvb keeps running on built-in defaults when it cannot read its config
+  if [ -n "${JVB_CONF_GROUP}" ] && [ "${JVB_CONF_GROUP}" != "jitsi" ] ; then
+    systemctl try-restart jitsi-videobridge.service
+  fi
+} >>"${LOGFILE}" 2>&1
 
 progress 100
 writelog "Config stage: completed"

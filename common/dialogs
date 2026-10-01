@@ -11,12 +11,9 @@ fi
 WELCOME_MSG="\
 Welcome to grommunio Setup.
 
-grommunio Setup helps setting up grommunio and get it up and running.
-During the installation, grommunio Setup will modify system settings.
+grommunio Setup helps setting up grommunio and get it up and running. During the installation, grommunio Setup will modify system settings.
 
-Make sure that, before running grommunio Setup, you have a working Internet
-connection. This is needed to access online software repositories
-and create TLS certificates using Let's Encrypt.
+Make sure that, before running grommunio Setup, you have a working Internet connection. This is needed to access online software repositories and create TLS certificates using Let's Encrypt.
 
 You can always abort grommunio Setup by pressing the \"ESC\" key.
 
@@ -28,7 +25,7 @@ dialog_welcome ()
 		--backtitle "grommunio Setup" \
 		--title "Welcome" \
 		--yes-label "Continue" \
-		--no-label "Cancel" --defaultno \
+		--no-label "Cancel" \
 		--yesno "${WELCOME_MSG}" 0 0
 	dialog_exit $?
 }
@@ -93,13 +90,9 @@ get_relayhost()
 CHOOSE_MODE_MSG="\
 grommunio Setup has already been run on this system.
 
-You can re-run the configuration at any time. This is safe: existing data,
-passwords and certificates are preserved. Use it to apply updates or to add
-or remove optional roles (the role list will reflect what is currently
-installed).
+You can re-run the configuration at any time. This is safe: existing data, passwords and certificates are preserved. Use it to apply updates or to add or remove optional roles (the role list will reflect what is currently installed).
 
-Alternatively, you can reset everything and set the system up from scratch.
-This DELETES ALL DATA."
+Alternatively, you can reset everything and set the system up from scratch. This DELETES ALL DATA."
 
 # Sets SETUP_ACTION to "reconfigure" or "scratch".
 choose_setup_mode()
@@ -118,8 +111,7 @@ choose_setup_mode()
 FEATURES_MSG="\
 Choose the features grommunio-setup should install and configure.
 
-Roles that are currently installed are pre-selected. Unticking a role removes
-it (its data is kept so it can be re-added later); ticking a new role adds it.
+Roles that are currently installed are pre-selected. Unticking a role removes it (its data is kept so it can be re-added later); ticking a new role adds it.
 "
 
 # checkbox state ("on"/"off") for a role, defaulting to its currently-installed

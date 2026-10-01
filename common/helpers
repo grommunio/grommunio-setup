@@ -275,6 +275,47 @@ pkg_installed()
 	rpm -q "$1" >/dev/null 2>&1
 }
 
+# system_fqdn - this host's FQDN, best effort. "hostname -f" needs the name to
+# resolve (e.g. via /etc/hosts) and otherwise fails or yields the short name,
+# so fall back to the configured static hostname. Sources are queried lazily,
+# /etc/hostname before hostnamectl (D-Bus may be unavailable, e.g. in a chroot),
+# and loopback names (localhost.localdomain) are skipped.
+system_fqdn()
+{
+	local i n first=""
+	for i in 1 2 3 4 ; do
+		case ${i} in
+		1) n=$(hostname -f 2>/dev/null) ;;
+		2) n=$(sed -n '/^[[:space:]]*\(#\|$\)/!{s/[[:space:]]//g;p;q}' /etc/hostname 2>/dev/null) ;;
+		3) n=$(timeout 5 hostnamectl --static 2>/dev/null) ;;
+		4) n=$(hostname 2>/dev/null) ;;
+		esac
+		n="${n%.}"
+		case ${n} in
+		""|localhost|localhost.*) continue ;;
+		esac
+		[ -z "${first}" ] && first="${n}"
+		if [[ ${n} == *.* ]] ; then
+			echo "${n}"
+			return 0
+		fi
+	done
+	echo "${first}"
+}
+
+# fqdn_domain FQDN - the domain part of FQDN (mail.example.com -> example.com),
+# or FQDN itself if stripping the host label would leave only a TLD.
+fqdn_domain()
+{
+	local f="${1%.}" dots
+	dots="${f//[^.]/}"
+	if [ "${#dots}" -ge 2 ] ; then
+		echo "${f#*.}"
+	else
+		echo "${f}"
+	fi
+}
+
 # --- role metadata ----------------------------------------------------------
 
 # All optional roles managed by the setup, in a stable order.
