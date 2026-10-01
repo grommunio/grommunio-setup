@@ -628,7 +628,7 @@ progress 60
 if [ "${SETUP_MODE}" = "fresh" ] ; then
   writelog "Config stage: admin password set"
   grommunio-admin passwd --password "${ADMIN_PASS}" >>"${LOGFILE}" 2>&1
-  mkcredfile 0640 grommunio-antispam,rspamd,_rspamd /etc/grommunio-antispam/local.d/worker-controller.inc
+  mkcredfile 0640 grommunio /etc/grommunio-antispam/local.d/worker-controller.inc
   rspamadm pw -p "${ADMIN_PASS}" | sed -e 's#^#password = "#' -e 's#$#";#' > /etc/grommunio-antispam/local.d/worker-controller.inc
 else
   writelog "Config stage: preserving existing admin and antispam passwords"
@@ -852,7 +852,7 @@ harden_credential_files()
                           /etc/postfix/grommunio-virtual-mailbox-alias-maps.cf \
                           /etc/postfix/grommunio-virtual-mailbox-maps.cf \
                           /etc/postfix/grommunio-bcc-forwards.cf
-  hardenfile 0640 grommunio-antispam,rspamd,_rspamd /etc/grommunio-antispam/local.d/worker-controller.inc
+  hardenfile 0640 grommunio /etc/grommunio-antispam/local.d/worker-controller.inc
   hardenfile 0600 "" /etc/zypp/repos.d/grommunio.repo
   hardenfile 0640 grochat /etc/grommunio-chat/config.json
   hardenfile 0640 prosody "/etc/prosody/conf.d/${FQDN}.cfg.lua"
