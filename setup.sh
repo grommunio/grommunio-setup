@@ -770,7 +770,7 @@ progress 90
 writelog "Config stage: restart all required services"
 systemctl restart "${MEMCACHE_UNIT}" nginx.service php-fpm.service gromox-delivery.service \
   gromox-event.service gromox-http.service gromox-imap.service gromox-midb.service \
-  gromox-pop3.service gromox-delivery-queue.service gromox-timer.service gromox-zcore.service \
+  gromox-pop3.service gromox-delivery-queue.service gromox-zcore.service \
   grommunio-admin-api.service saslauthd.service grommunio-antispam.service >>"${LOGFILE}" 2>&1
 
 if [ "$FT_FILES" == "true" ] ; then
