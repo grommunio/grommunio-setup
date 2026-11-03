@@ -542,7 +542,7 @@ progress 10
 writelog "Config stage: enable all services"
 systemctl enable "${MEMCACHE_UNIT}" gromox-delivery.service gromox-event.service \
   gromox-http.service gromox-imap.service gromox-midb.service gromox-pop3.service \
-  gromox-delivery-queue.service gromox-timer.service gromox-zcore.service grommunio-antispam.service \
+  gromox-delivery-queue.service gromox-zcore.service grommunio-antispam.service \
   php-fpm.service nginx.service grommunio-admin-api.service saslauthd.service mariadb >>"${LOGFILE}" 2>&1
 
 progress 20
