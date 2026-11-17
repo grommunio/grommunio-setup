@@ -6,7 +6,9 @@ pushd /etc/grommunio-common/ssl/
 
 openssl genrsa -aes256 -passout "pass:${SSL_PASS}" -out rootCA.key 4096
 openssl req -x509 -new -nodes -key rootCA.key -sha256 -days "${SSL_DAYS}" -out rootCA.crt -passin "pass:${SSL_PASS}" \
-	-subj "/C=${SSL_COUNTRY}/ST=${SSL_STATE}/L=${SSL_LOCALITY}/O=${SSL_ORG}/OU=${SSL_OU}/CN=grommunio CA/emailAddress=${SSL_EMAIL}"
+	-subj "/C=${SSL_COUNTRY}/ST=${SSL_STATE}/L=${SSL_LOCALITY}/O=${SSL_ORG}/OU=${SSL_OU}/CN=grommunio CA/emailAddress=${SSL_EMAIL}" \
+	-addext "basicConstraints=critical,CA:TRUE" \
+	-addext "keyUsage=critical,keyCertSign,cRLSign"
 
 openssl genrsa -out "${DOMAIN}.key" 2048
 openssl req -new -sha256 \
@@ -23,7 +25,8 @@ fi
 
 openssl x509 -req \
 	-in "${DOMAIN}.csr" -CA rootCA.crt -CAkey rootCA.key -CAcreateserial \
-	-extfile <(printf "${SUBJECTALTNAMES}") \
+	-extfile <(printf '%s\n' "${SUBJECTALTNAMES}" "basicConstraints=CA:FALSE" \
+		"keyUsage=critical,digitalSignature,keyEncipherment" "extendedKeyUsage=serverAuth") \
 	-out "${DOMAIN}.crt" -days "${SSL_DAYS}" -sha256 -passin "pass:${SSL_PASS}"
 
 openssl rsa -in "${DOMAIN}.key" -passin "pass:${SSL_PASS}" -out "${DOMAIN}.key"
