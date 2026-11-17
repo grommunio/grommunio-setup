@@ -161,6 +161,16 @@ setup_role_chat()
 		MMCTL_LOCAL_SOCKET_PATH=/var/tmp/grommunio-chat_local.socket bin/grommunio-chat-ctl --local user create --email admin@localhost --username admin --password "${CHAT_ADMIN_PASS}" --system-admin >>"${LOGFILE}" 2>&1
 	popd || return
 
+	# Only skip certificate verification if the certificate does not cover
+	# the FQDN or is not trusted by the system CA store. Check strictly, as
+	# Python >= 3.13 enforces RFC 5280 compliance of the chain.
+	CHAT_TLS_VERIFY="False"
+	if openssl x509 -in "${SSL_BUNDLE_T}" -noout -checkhost "${FQDN}" 2>/dev/null | grep -q "does match" &&
+	   openssl verify -x509_strict -CAfile /etc/ssl/ca-bundle.pem -untrusted "${SSL_BUNDLE_T}" "${SSL_BUNDLE_T}" >>"${LOGFILE}" 2>&1; then
+		CHAT_TLS_VERIFY="True"
+	fi
+	writelog "Chat API certificate verification for ${FQDN}: ${CHAT_TLS_VERIFY}"
+
 mkcredfile 0640 grommunio /etc/grommunio-admin-api/conf.d/chat.yaml
 cat > /etc/grommunio-admin-api/conf.d/chat.yaml <<EOCHAT
 chat:
@@ -171,7 +181,7 @@ chat:
     basepath: /chat/api/v4
     port: 443
     scheme: https
-    verify: False
+    verify: ${CHAT_TLS_VERIFY}
 EOCHAT
 
 	chmod 640 "${CHAT_CONFIG}"
