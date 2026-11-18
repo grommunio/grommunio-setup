@@ -548,7 +548,8 @@ setup_role_archive()
 	setconf /etc/grommunio-archive/grommunio-archive.conf mysqluser "${ARCHIVE_MYSQL_USER}" 0
 	setconf /etc/grommunio-archive/grommunio-archive.conf mysqlpwd "${ARCHIVE_MYSQL_PASS}" 0
 	setconf /etc/grommunio-archive/grommunio-archive.conf mysqldb "${ARCHIVE_MYSQL_DB}" 0
-	setconf /etc/grommunio-archive/grommunio-archive.conf listen_addr 0.0.0.0 0
+	# only the local postfix feeds the archive
+	setconf /etc/grommunio-archive/grommunio-archive.conf listen_addr 127.0.0.1 0
 	setconf /etc/grommunio-archive/grommunio-archive.conf storedir /var/lib/grommunio-archive/store
 
 	mkcredfile 0640 sphinx /etc/sphinx/sphinx.conf
