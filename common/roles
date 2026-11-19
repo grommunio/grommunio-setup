@@ -489,7 +489,6 @@ setup_role_archive()
 		systemctl start searchd.service grommunio-archive-smtp.service grommunio-archive.service >>"${LOGFILE}" 2>&1
 		# Re-assert the postfix archiver wiring (the core block above reset the
 		# recipient restrictions to the non-archive default) and restart postfix.
-		echo "/(.*)/   prepend X-Envelope-To: \$1" > /etc/postfix/grommunio-archiver-envelope.cf
 		archive_postfix_enable
 		systemctl restart postfix.service >>"${LOGFILE}" 2>&1
 		return 0
@@ -515,7 +514,6 @@ setup_role_archive()
 		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqluser) ; [ -n "${v}" ] && ARCHIVE_MYSQL_USER="${v}"
 		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqldb)   ; [ -n "${v}" ] && ARCHIVE_MYSQL_DB="${v}"
 		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqlpwd)  ; [ -n "${v}" ] && ARCHIVE_MYSQL_PASS="${v}"
-		echo "/(.*)/   prepend X-Envelope-To: \$1" > /etc/postfix/grommunio-archiver-envelope.cf
 		archive_postfix_enable
 		archive_start_services
 		state_set FT_ARCHIVE true
@@ -571,7 +569,6 @@ setup_role_archive()
 	chgrp groarchive /etc/grommunio-archive/grommunio-archive.key
 	chmod 0640 /etc/grommunio-archive/grommunio-archive.key
 
-	echo "/(.*)/   prepend X-Envelope-To: \$1" > /etc/postfix/grommunio-archiver-envelope.cf
 	archive_postfix_enable
 	archive_start_services
 
@@ -587,22 +584,30 @@ setup_role_archive()
 	state_set ARCHIVE_MYSQL_DB "${ARCHIVE_MYSQL_DB}"
 }
 
-# Wire postfix to bcc all mail into the archiver. Uses the shared core recipient
-# restrictions (CORE_RCPT_RESTRICTIONS) as the base.
+# Wire postfix to bcc all mail into the archiver. Idempotent; shared by the
+# install, restore and keep paths.
 archive_postfix_enable()
 {
+	echo "/(.*)/   prepend X-Envelope-To: \$1" > /etc/postfix/grommunio-archiver-envelope.cf
 	postconf -e "smtpd_recipient_restrictions=permit_sasl_authenticated,permit_mynetworks,check_recipient_access pcre:/etc/postfix/grommunio-archiver-envelope.cf,reject_unknown_recipient_domain,reject_non_fqdn_hostname,reject_non_fqdn_sender,reject_non_fqdn_recipient,reject_unauth_destination,reject_unauth_pipelining"
 	postconf -e "always_bcc=archive@${FQDN}"
 	echo "archive@${FQDN} smtp:[127.0.0.1]:2693" > /etc/postfix/transport
 	postmap /etc/postfix/transport
 }
 
+# Remove what archive_postfix_enable added, except for the recipient
+# restrictions, which the caller resets. Harmless if archive was not set up.
+archive_postfix_unwire()
+{
+	postconf -X always_bcc >>"${LOGFILE}" 2>&1
+	rm -f /etc/postfix/transport /etc/postfix/transport.db /etc/postfix/grommunio-archiver-envelope.cf
+}
+
 # Undo the postfix archiver wiring so mail flow is not impacted after removal.
 archive_postfix_disable()
 {
-	postconf -X always_bcc >>"${LOGFILE}" 2>&1
 	postconf -e "smtpd_recipient_restrictions=${CORE_RCPT_RESTRICTIONS}"
-	rm -f /etc/postfix/transport /etc/postfix/transport.db /etc/postfix/grommunio-archiver-envelope.cf
+	archive_postfix_unwire
 	systemctl restart postfix.service >>"${LOGFILE}" 2>&1
 }
 

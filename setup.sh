@@ -96,9 +96,8 @@ To confirm deletion of ALL data, type "removealldata" to continue.
 		rm -f "${STATE_FILE}"
 		# Tear down any archive postfix wiring so the wiped system does not keep
 		# bcc-copying mail to a now-dropped archive (the core postconf block below
-		# resets smtpd_recipient_restrictions). Harmless if archive was not set up.
-		postconf -X always_bcc >>"${LOGFILE}" 2>&1
-		rm -f /etc/postfix/transport /etc/postfix/transport.db /etc/postfix/grommunio-archiver-envelope.cf
+		# resets smtpd_recipient_restrictions).
+		archive_postfix_unwire
 		unset CHAT_MYSQL_PASS FILES_MYSQL_PASS OFFICE_MYSQL_PASS ARCHIVE_MYSQL_PASS
 		SETUP_MODE="fresh"
 	else
