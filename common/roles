@@ -510,6 +510,7 @@ setup_role_archive()
 	# config (do NOT rotate the DB-user password) and re-attach.
 	if restore_role archive; then
 		writelog "Config feature archive: restored previous configuration."
+		archive_listener_loopback
 		local v
 		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqluser) ; [ -n "${v}" ] && ARCHIVE_MYSQL_USER="${v}"
 		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqldb)   ; [ -n "${v}" ] && ARCHIVE_MYSQL_DB="${v}"
@@ -602,6 +603,18 @@ archive_header_checks()
 	done
 }
 
+# Setups made by earlier versions listen on all addresses, although only the
+# local postfix delivers to the archive. Narrow that default; any other value
+# is left alone.
+archive_listener_loopback()
+{
+	local conf=/etc/grommunio-archive/grommunio-archive.conf
+	grep -qs '^listen_addr=0\.0\.0\.0[[:space:]]*$' "${conf}" || return 0
+	sed -i 's/^listen_addr=0\.0\.0\.0[[:space:]]*$/listen_addr=127.0.0.1/' "${conf}"
+	writelog "Config feature archive: listen_addr changed from 0.0.0.0 to 127.0.0.1."
+	systemctl try-restart grommunio-archive-smtp.service >>"${LOGFILE}" 2>&1
+}
+
 # archive_transport [NEXTHOP] - set the transport map entry of the archive
 # address, or drop it without NEXTHOP. Other entries are kept, and the map
 # stays in place because transport_maps refers to it.
@@ -640,6 +653,11 @@ archive_postfix_enable()
 	archive_header_checks add
 	postconf -M archive/unix="archive unix - - n - - smtp"
 	postconf -P archive/unix/smtp_header_checks= archive/unix/syslog_name=postfix/archive
+	# A setup still on the old route also has the old listener default. Only
+	# then, so that an admin can open the listener again afterwards.
+	if grep -Eqs '^archive@[^[:space:]]+[[:space:]]+smtp:\[127\.0\.0\.1\]:2693[[:space:]]*$' /etc/postfix/transport; then
+		archive_listener_loopback
+	fi
 	archive_transport "archive:[127.0.0.1]:2693"
 }
 
