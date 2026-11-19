@@ -584,16 +584,22 @@ setup_role_archive()
 	state_set ARCHIVE_MYSQL_DB "${ARCHIVE_MYSQL_DB}"
 }
 
-# Wire postfix to bcc all mail into the archiver. Idempotent; shared by the
+# Wire postfix to bcc all mail into the archiver, on top of the shared core
+# recipient restrictions (CORE_RCPT_RESTRICTIONS). Idempotent; shared by the
 # install, restore and keep paths.
 archive_postfix_enable()
 {
+	local unlisted=",reject_unlisted_recipient"
 	# One plain address per header. The archiver splits the value on
 	# whitespace and most punctuation, so other forms get no header.
 	cat > /etc/postfix/grommunio-archiver-envelope.cf <<-'EOF'
 	/^([A-Za-z0-9!$&'+._-]+@[A-Za-z0-9.-]+)$/   prepend X-Envelope-To: $1
 	EOF
-	postconf -e "smtpd_recipient_restrictions=permit_sasl_authenticated,permit_mynetworks,check_recipient_access pcre:/etc/postfix/grommunio-archiver-envelope.cf,reject_unknown_recipient_domain,reject_non_fqdn_hostname,reject_non_fqdn_sender,reject_non_fqdn_recipient,reject_unauth_destination,reject_unauth_pipelining"
+	# prepend acts at lookup time, even when a later restriction rejects the
+	# recipient: keep it last, behind the otherwise implicit unlisted
+	# recipient check (unless the admin turned that off).
+	[ "$(postconf -xh smtpd_reject_unlisted_recipient 2>/dev/null)" = "no" ] && unlisted=""
+	postconf -e "smtpd_recipient_restrictions=${CORE_RCPT_RESTRICTIONS}${unlisted},check_recipient_access pcre:/etc/postfix/grommunio-archiver-envelope.cf"
 	postconf -e "always_bcc=archive@${FQDN}"
 	echo "archive@${FQDN} smtp:[127.0.0.1]:2693" > /etc/postfix/transport
 	postmap /etc/postfix/transport
