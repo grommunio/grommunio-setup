@@ -644,11 +644,12 @@ archive_postfix_enable()
 }
 
 # Remove what archive_postfix_enable added, except for the recipient
-# restrictions, which the caller resets. Harmless if archive was not set up.
+# restrictions, which the caller resets. $1, if given, is the transport left
+# for the archive address. Harmless if archive was not set up.
 archive_postfix_unwire()
 {
 	postconf -X always_bcc >>"${LOGFILE}" 2>&1
-	archive_transport
+	archive_transport "$1"
 	archive_header_checks del
 	postconf -MX archive/unix >>"${LOGFILE}" 2>&1
 	rm -f /etc/postfix/grommunio-archiver-envelope.cf "${ARCHIVE_STRIP_CF}"
@@ -658,7 +659,9 @@ archive_postfix_unwire()
 archive_postfix_disable()
 {
 	postconf -e "smtpd_recipient_restrictions=${CORE_RCPT_RESTRICTIONS}"
-	archive_postfix_unwire
+	# Copies still in the queue would bounce without a route. Hold them, the
+	# role may be added again.
+	archive_postfix_unwire "retry:4.3.0 archive role removed"
 	systemctl restart postfix.service >>"${LOGFILE}" 2>&1
 }
 
