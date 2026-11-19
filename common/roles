@@ -584,6 +584,24 @@ setup_role_archive()
 	state_set ARCHIVE_MYSQL_DB "${ARCHIVE_MYSQL_DB}"
 }
 
+ARCHIVE_STRIP_CF="/etc/postfix/grommunio-archiver-strip.pcre"
+
+# archive_header_checks add|del - put the strip table into, or take it out of,
+# the smtp/lmtp client header checks. Tables set by the admin are kept.
+archive_header_checks()
+{
+	local p cur
+	for p in smtp_header_checks lmtp_header_checks; do
+		cur=$(postconf -h "${p}" 2>/dev/null | sed -e "s|pcre:${ARCHIVE_STRIP_CF}||g" -e 's/^[,[:space:]]*//' -e 's/[,[:space:]]*$//')
+		[ "$1" = "add" ] && cur="pcre:${ARCHIVE_STRIP_CF}${cur:+, ${cur}}"
+		if [ -n "${cur}" ]; then
+			postconf -e "${p}=${cur}"
+		else
+			postconf -X "${p}" >>"${LOGFILE}" 2>&1
+		fi
+	done
+}
+
 # archive_transport [NEXTHOP] - set the transport map entry of the archive
 # address, or drop it without NEXTHOP. Other entries are kept, and the map
 # stays in place because transport_maps refers to it.
@@ -616,7 +634,13 @@ archive_postfix_enable()
 	[ "$(postconf -xh smtpd_reject_unlisted_recipient 2>/dev/null)" = "no" ] && unlisted=""
 	postconf -e "smtpd_recipient_restrictions=${CORE_RCPT_RESTRICTIONS}${unlisted},check_recipient_access pcre:/etc/postfix/grommunio-archiver-envelope.cf"
 	postconf -e "always_bcc=archive@${FQDN}"
-	archive_transport "smtp:[127.0.0.1]:2693"
+	# The header discloses Bcc recipients and is meant for the archiver only:
+	# strip it on delivery, except on the transport to the archiver.
+	echo '/^X-(Piler-)?Envelope-To:/ IGNORE' > "${ARCHIVE_STRIP_CF}"
+	archive_header_checks add
+	postconf -M archive/unix="archive unix - - n - - smtp"
+	postconf -P archive/unix/smtp_header_checks= archive/unix/syslog_name=postfix/archive
+	archive_transport "archive:[127.0.0.1]:2693"
 }
 
 # Remove what archive_postfix_enable added, except for the recipient
@@ -625,7 +649,9 @@ archive_postfix_unwire()
 {
 	postconf -X always_bcc >>"${LOGFILE}" 2>&1
 	archive_transport
-	rm -f /etc/postfix/grommunio-archiver-envelope.cf
+	archive_header_checks del
+	postconf -MX archive/unix >>"${LOGFILE}" 2>&1
+	rm -f /etc/postfix/grommunio-archiver-envelope.cf "${ARCHIVE_STRIP_CF}"
 }
 
 # Undo the postfix archiver wiring so mail flow is not impacted after removal.
