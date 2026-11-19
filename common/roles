@@ -489,7 +489,6 @@ setup_role_archive()
 		systemctl start searchd.service grommunio-archive-smtp.service grommunio-archive.service >>"${LOGFILE}" 2>&1
 		# Re-assert the postfix archiver wiring (the core block above reset the
 		# recipient restrictions to the non-archive default) and restart postfix.
-		echo "/(.*)/   prepend X-Envelope-To: \$1" > /etc/postfix/grommunio-archiver-envelope.cf
 		archive_postfix_enable
 		systemctl restart postfix.service >>"${LOGFILE}" 2>&1
 		return 0
@@ -511,11 +510,11 @@ setup_role_archive()
 	# config (do NOT rotate the DB-user password) and re-attach.
 	if restore_role archive; then
 		writelog "Config feature archive: restored previous configuration."
+		archive_listener_loopback
 		local v
 		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqluser) ; [ -n "${v}" ] && ARCHIVE_MYSQL_USER="${v}"
 		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqldb)   ; [ -n "${v}" ] && ARCHIVE_MYSQL_DB="${v}"
 		v=$(getconf_val /etc/grommunio-archive/grommunio-archive.conf mysqlpwd)  ; [ -n "${v}" ] && ARCHIVE_MYSQL_PASS="${v}"
-		echo "/(.*)/   prepend X-Envelope-To: \$1" > /etc/postfix/grommunio-archiver-envelope.cf
 		archive_postfix_enable
 		archive_start_services
 		state_set FT_ARCHIVE true
@@ -548,7 +547,8 @@ setup_role_archive()
 	setconf /etc/grommunio-archive/grommunio-archive.conf mysqluser "${ARCHIVE_MYSQL_USER}" 0
 	setconf /etc/grommunio-archive/grommunio-archive.conf mysqlpwd "${ARCHIVE_MYSQL_PASS}" 0
 	setconf /etc/grommunio-archive/grommunio-archive.conf mysqldb "${ARCHIVE_MYSQL_DB}" 0
-	setconf /etc/grommunio-archive/grommunio-archive.conf listen_addr 0.0.0.0 0
+	# only the local postfix feeds the archive
+	setconf /etc/grommunio-archive/grommunio-archive.conf listen_addr 127.0.0.1 0
 	setconf /etc/grommunio-archive/grommunio-archive.conf storedir /var/lib/grommunio-archive/store
 
 	mkcredfile 0640 sphinx /etc/sphinx/sphinx.conf
@@ -570,7 +570,6 @@ setup_role_archive()
 	chgrp groarchive /etc/grommunio-archive/grommunio-archive.key
 	chmod 0640 /etc/grommunio-archive/grommunio-archive.key
 
-	echo "/(.*)/   prepend X-Envelope-To: \$1" > /etc/postfix/grommunio-archiver-envelope.cf
 	archive_postfix_enable
 	archive_start_services
 
@@ -586,22 +585,101 @@ setup_role_archive()
 	state_set ARCHIVE_MYSQL_DB "${ARCHIVE_MYSQL_DB}"
 }
 
-# Wire postfix to bcc all mail into the archiver. Uses the shared core recipient
-# restrictions (CORE_RCPT_RESTRICTIONS) as the base.
+ARCHIVE_STRIP_CF="/etc/postfix/grommunio-archiver-strip.pcre"
+
+# archive_header_checks add|del - put the strip table into, or take it out of,
+# the smtp/lmtp client header checks. Tables set by the admin are kept.
+archive_header_checks()
+{
+	local p cur
+	for p in smtp_header_checks lmtp_header_checks; do
+		cur=$(postconf -h "${p}" 2>/dev/null | sed -e "s|pcre:${ARCHIVE_STRIP_CF}||g" -e 's/^[,[:space:]]*//' -e 's/[,[:space:]]*$//')
+		[ "$1" = "add" ] && cur="pcre:${ARCHIVE_STRIP_CF}${cur:+, ${cur}}"
+		if [ -n "${cur}" ]; then
+			postconf -e "${p}=${cur}"
+		else
+			postconf -X "${p}" >>"${LOGFILE}" 2>&1
+		fi
+	done
+}
+
+# Setups made by earlier versions listen on all addresses, although only the
+# local postfix delivers to the archive. Narrow that default; any other value
+# is left alone.
+archive_listener_loopback()
+{
+	local conf=/etc/grommunio-archive/grommunio-archive.conf
+	grep -qs '^listen_addr=0\.0\.0\.0[[:space:]]*$' "${conf}" || return 0
+	sed -i 's/^listen_addr=0\.0\.0\.0[[:space:]]*$/listen_addr=127.0.0.1/' "${conf}"
+	writelog "Config feature archive: listen_addr changed from 0.0.0.0 to 127.0.0.1."
+	systemctl try-restart grommunio-archive-smtp.service >>"${LOGFILE}" 2>&1
+}
+
+# archive_transport [NEXTHOP] - set the transport map entry of the archive
+# address, or drop it without NEXTHOP. Other entries are kept, and the map
+# stays in place because transport_maps refers to it.
+archive_transport()
+{
+	local map=/etc/postfix/transport rest
+	[ -n "$1" ] || grep -qs '^archive@' "${map}" || return 0
+	rest=$(grep -avs '^archive@' "${map}")
+	{
+		[ -z "${rest}" ] || printf '%s\n' "${rest}"
+		[ -z "$1" ] || echo "archive@${FQDN} $1"
+	} > "${map}"
+	postmap "${map}" >>"${LOGFILE}" 2>&1
+}
+
+# Wire postfix to bcc all mail into the archiver, on top of the shared core
+# recipient restrictions (CORE_RCPT_RESTRICTIONS). Idempotent; shared by the
+# install, restore and keep paths.
 archive_postfix_enable()
 {
-	postconf -e "smtpd_recipient_restrictions=permit_sasl_authenticated,permit_mynetworks,check_recipient_access pcre:/etc/postfix/grommunio-archiver-envelope.cf,reject_unknown_recipient_domain,reject_non_fqdn_hostname,reject_non_fqdn_sender,reject_non_fqdn_recipient,reject_unauth_destination,reject_unauth_pipelining"
+	local unlisted=",reject_unlisted_recipient"
+	# One plain address per header. The archiver splits the value on
+	# whitespace and most punctuation, so other forms get no header.
+	cat > /etc/postfix/grommunio-archiver-envelope.cf <<-'EOF'
+	/^([A-Za-z0-9!$&'+._-]+@[A-Za-z0-9.-]+)$/   prepend X-Envelope-To: $1
+	EOF
+	# prepend acts at lookup time, even when a later restriction rejects the
+	# recipient: keep it last, behind the otherwise implicit unlisted
+	# recipient check (unless the admin turned that off).
+	[ "$(postconf -xh smtpd_reject_unlisted_recipient 2>/dev/null)" = "no" ] && unlisted=""
+	postconf -e "smtpd_recipient_restrictions=${CORE_RCPT_RESTRICTIONS}${unlisted},check_recipient_access pcre:/etc/postfix/grommunio-archiver-envelope.cf"
 	postconf -e "always_bcc=archive@${FQDN}"
-	echo "archive@${FQDN} smtp:[127.0.0.1]:2693" > /etc/postfix/transport
-	postmap /etc/postfix/transport
+	# The header discloses Bcc recipients and is meant for the archiver only:
+	# strip it on delivery, except on the transport to the archiver.
+	echo '/^X-(Piler-)?Envelope-To:/ IGNORE' > "${ARCHIVE_STRIP_CF}"
+	archive_header_checks add
+	postconf -M archive/unix="archive unix - - n - - smtp"
+	postconf -P archive/unix/smtp_header_checks= archive/unix/syslog_name=postfix/archive
+	# A setup still on the old route also has the old listener default. Only
+	# then, so that an admin can open the listener again afterwards.
+	if grep -Eqs '^archive@[^[:space:]]+[[:space:]]+smtp:\[127\.0\.0\.1\]:2693[[:space:]]*$' /etc/postfix/transport; then
+		archive_listener_loopback
+	fi
+	archive_transport "archive:[127.0.0.1]:2693"
+}
+
+# Remove what archive_postfix_enable added, except for the recipient
+# restrictions, which the caller resets. $1, if given, is the transport left
+# for the archive address. Harmless if archive was not set up.
+archive_postfix_unwire()
+{
+	postconf -X always_bcc >>"${LOGFILE}" 2>&1
+	archive_transport "$1"
+	archive_header_checks del
+	postconf -MX archive/unix >>"${LOGFILE}" 2>&1
+	rm -f /etc/postfix/grommunio-archiver-envelope.cf "${ARCHIVE_STRIP_CF}"
 }
 
 # Undo the postfix archiver wiring so mail flow is not impacted after removal.
 archive_postfix_disable()
 {
-	postconf -X always_bcc >>"${LOGFILE}" 2>&1
 	postconf -e "smtpd_recipient_restrictions=${CORE_RCPT_RESTRICTIONS}"
-	rm -f /etc/postfix/transport /etc/postfix/transport.db /etc/postfix/grommunio-archiver-envelope.cf
+	# Copies still in the queue would bounce without a route. Hold them, the
+	# role may be added again.
+	archive_postfix_unwire "retry:4.3.0 archive role removed"
 	systemctl restart postfix.service >>"${LOGFILE}" 2>&1
 }
 
