@@ -630,6 +630,127 @@ else
   writelog "Config stage: preserving existing admin and antispam passwords"
 fi
 
+writelog "Config stage: DKIM keystore (dedicated Redis instance)"
+DKIM_REDIS_HOST=${DKIM_REDIS_HOST:-127.0.0.1}
+DKIM_REDIS_PORT=${DKIM_REDIS_PORT:-6380}
+# If the keystore was provisioned before, keep its connection settings
+# and credentials; they can be changed by editing /etc/redis/dkim.conf
+# and re-running setup. Otherwise ask for them (first provisioning, on
+# fresh installs and on existing systems alike).
+if [ -f /etc/redis/dkim.conf ] ; then
+  DKIM_REDIS_USER=$(sed -n 's/^user \([A-Za-z0-9_.-]*\) on .*/\1/p' /etc/redis/dkim.conf | head -1)
+  if [ -n "${DKIM_REDIS_USER}" ] ; then
+    DKIM_REDIS_PASS=$(sed -n "s/^user ${DKIM_REDIS_USER} on >\([^ ]*\).*/\1/p" /etc/redis/dkim.conf | head -1)
+  else
+    DKIM_REDIS_USER=default
+    DKIM_REDIS_PASS=$(sed -n 's/^requirepass "//p' /etc/redis/dkim.conf | head -1)
+    DKIM_REDIS_PASS=${DKIM_REDIS_PASS%\"}
+  fi
+  DKIM_REDIS_PORT=$(sed -n 's/^port \([0-9][0-9]*\).*/\1/p' /etc/redis/dkim.conf | head -1)
+  DKIM_REDIS_HOST=$(sed -n 's/^bind \(.*\)$/\1/p' /etc/redis/dkim.conf | head -1)
+  DKIM_REDIS_PORT=${DKIM_REDIS_PORT:-6380}
+  DKIM_REDIS_HOST=${DKIM_REDIS_HOST:-127.0.0.1}
+  # An existing keystore without credentials cannot be adopted: new
+  # credentials in the consumer configuration would not apply to the
+  # already running (authless) instance.
+  if [ -z "${DKIM_REDIS_USER}" ] || [ -z "${DKIM_REDIS_PASS}" ] ; then
+    dialog --no-mouse --clear --colors --backtitle "grommunio Setup" --title "DKIM keystore credentials" --msgbox \
+"The existing DKIM keystore configuration /etc/redis/dkim.conf contains
+no user name and password. The DKIM keystore always requires
+credentials.
+
+Add credentials to /etc/redis/dkim.conf (a 'user ... on >...' ACL entry
+or 'requirepass \"...\"') and re-run setup." 0 0
+    writelog "Setup aborted: existing DKIM keystore config has no credentials"
+    exit 1
+  fi
+elif [ -z "${DKIM_REDIS_USER}" ] || [ -z "${DKIM_REDIS_PASS}" ] ; then
+  get_dkim_redis_pass
+fi
+if [ -z "${DKIM_REDIS_USER}" ] || [ -z "${DKIM_REDIS_PASS}" ] ; then
+  dialog --no-mouse --clear --colors --backtitle "grommunio Setup" --title "DKIM keystore credentials" --msgbox \
+"No credentials for the DKIM keystore were provided. The keystore always
+requires a user name and password. Re-run setup and enter them." 0 0
+  writelog "Setup aborted: no DKIM keystore credentials provided"
+  exit 1
+fi
+mkdir -p /var/lib/redis-dkim
+chown redis:redis /var/lib/redis-dkim
+chmod 0750 /var/lib/redis-dkim
+cat > /etc/redis/dkim.conf <<EOF
+port ${DKIM_REDIS_PORT}
+bind ${DKIM_REDIS_HOST}
+protected-mode yes
+supervised systemd
+pidfile /run/redis/dkim.pid
+dir /var/lib/redis-dkim
+dbfilename dkim.rdb
+appendonly yes
+appendfilename "dkim.aof"
+EOF
+if [ "${DKIM_REDIS_USER}" = "default" ] ; then
+  cat >> /etc/redis/dkim.conf <<EOF
+requirepass "${DKIM_REDIS_PASS}"
+EOF
+else
+  cat >> /etc/redis/dkim.conf <<EOF
+user default off
+user ${DKIM_REDIS_USER} on >${DKIM_REDIS_PASS} ~* &* +@all
+EOF
+fi
+# Whenever the keystore is (re)started - including at system boot - it is
+# filled from the database right away, so it holds the correct data within
+# seconds instead of waiting for the next timer tick. The sync runs in the
+# background so a slow or failing sync (missing database during early boot)
+# can never hold the keystore unit in "activating"; prefixes: '+' runs it
+# as root (the unit itself runs as redis), '-' keeps a failed sync from
+# failing the keystore unit (the sync timer retries anyway).
+mkdir -p /etc/systemd/system/redis@dkim.service.d
+cat > /etc/systemd/system/redis@dkim.service.d/dkim-sync.conf <<EOF
+[Service]
+ExecStartPost=-+/bin/sh -c '/usr/sbin/grommunio-admin dkim sync >/var/log/grommunio-dkim-sync.log 2>&1 &'
+EOF
+systemctl daemon-reload >>"${LOGFILE}" 2>&1
+systemctl enable --now redis@dkim >>"${LOGFILE}" 2>&1
+
+# grommunio-antispam reads DKIM keys from this instance (use_redis), so
+# the API can publish keys without write access to the antispam
+# directories.
+cat > /etc/grommunio-antispam/local.d/dkim_signing.conf <<EOF
+use_redis = true;
+key_prefix = "DKIM_PRIV_KEYS";
+selector_prefix = "DKIM_SELECTORS";
+read_servers = "${DKIM_REDIS_HOST}:${DKIM_REDIS_PORT}";
+write_servers = "${DKIM_REDIS_HOST}:${DKIM_REDIS_PORT}";
+username = "${DKIM_REDIS_USER}";
+password = "${DKIM_REDIS_PASS}";
+EOF
+
+# The API stores keys in the central database (table dkim_keys) and
+# replicates them into this keystore.
+cat > /etc/grommunio-admin-api/conf.d/dkim-redis.yaml <<EOF
+dkimRedis:
+  enabled: true
+  host: ${DKIM_REDIS_HOST}
+  port: ${DKIM_REDIS_PORT}
+  username: '${DKIM_REDIS_USER}'
+  password: '${DKIM_REDIS_PASS}'
+EOF
+
+# Import keys of previous versions into the database (runs once per node,
+# guarded by the dbconf marker grommunio-admin/dkim/legacyFileImport; the
+# plaintext files are removed by the import itself - the database is the
+# only storage) and replicate the database into the keystore right away.
+grommunio-admin dkim import >>"${LOGFILE}" 2>&1 || writelog "Warning: DKIM legacy key file import failed (retried at API start)"
+grommunio-admin dkim sync >>"${LOGFILE}" 2>&1 || writelog "Warning: DKIM keystore sync failed (retried by grommunio-admin-dkim-sync.timer)"
+# Failed keystore pushes are retried every minute by the sync timer.
+systemctl enable --now grommunio-admin-dkim-sync.timer >>"${LOGFILE}" 2>&1 \
+  || writelog "Warning: could not enable grommunio-admin-dkim-sync.timer"
+
+# Locally submitted mail (gromox hands off via sendmail/pickup) is only
+# passed to the milter when non_smtpd_milters is set.
+postconf -e 'non_smtpd_milters=$smtpd_milters'
+
 writelog "Config stage: gromox tls configuration"
 setconf /etc/gromox/http.cfg http_certificate_path "${SSL_BUNDLE_T}"
 setconf /etc/gromox/http.cfg http_private_key_path "${SSL_KEY_T}"
