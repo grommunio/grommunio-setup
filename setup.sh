@@ -12,10 +12,7 @@ else
 	DATADIR="$(readlink -f "${DATADIR}")"
 fi
 LOGFILE="/var/log/grommunio-setup.log"
-if ! test -e "$LOGFILE"; then
-	true >"$LOGFILE"
-fi
-chmod 0600 "$LOGFILE"
+( umask 077 && : >>"$LOGFILE" ) && chmod 0600 "$LOGFILE"
 # shellcheck source=common/helpers
 . "${DATADIR}/common/helpers"
 # shellcheck source=common/dialogs
@@ -260,7 +257,7 @@ else
         writelog "mysql -h${MYSQL_HOST} -u${MYSQL_USER} ${MYSQL_DB}"
       elif [ -n "${MYSQL_HOST}" ] && [ -n "${MYSQL_USER}" ] && [ -n "${MYSQL_PASS}" ] && [ -n "${MYSQL_DB}" ]; then
         echo "show tables;" | mysql -h"${MYSQL_HOST}" -u"${MYSQL_USER}" -p"${MYSQL_PASS}" "${MYSQL_DB}" >/dev/null 2>&1
-        writelog "mysql -h${MYSQL_HOST} -u${MYSQL_USER} -p${MYSQL_PASS} ${MYSQL_DB}"
+        writelog "mysql -h${MYSQL_HOST} -u${MYSQL_USER} -p ${MYSQL_DB}"
       else
         failonme 1
       fi
@@ -290,7 +287,7 @@ else
       fi
     done
   fi
-  writelog "MySQL configuration: Host: ${MYSQL_HOST}, User: ${MYSQL_USER}, Password: ${MYSQL_PASS}, Database: ${MYSQL_DB}"
+  writelog "MySQL configuration: Host: ${MYSQL_HOST}, User: ${MYSQL_USER}, Database: ${MYSQL_DB}"
 
   dialog_adminpass
 
